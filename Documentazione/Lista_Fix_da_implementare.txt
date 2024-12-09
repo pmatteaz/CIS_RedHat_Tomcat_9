@@ -1,0 +1,38 @@
+2.4	    Disable X-Powered-By HTTP Header and Rename the Server Value for all Connectors
+2.5	    Disable client facing Stack Traces
+2.7	    Ensure Sever Header is Modified To Prevent Information Disclosure
+3.1	    Set a nondeterministic Shutdown command value
+3.2	    Disable the Shutdown port
+4.1	    Restrict access to $CATALINA_HOME
+4.2	    Restrict access to $CATALINA_BASE
+4.3	    Restrict access to Tomcat configuration directory
+4.4	    Restrict access to Tomcat logs directory
+4.5	    Restrict access to Tomcat temp directory
+4.6	    Restrict access to Tomcat binaries directory
+4.7	    Restrict access to Tomcat web application directory
+4.8	    Restrict access to Tomcat catalina.properties
+4.9	    Restrict access to Tomcat catalina.policy
+4.10	Restrict access to Tomcat context.xml
+4.11	Restrict access to Tomcat logging.properties
+4.12	Restrict access to Tomcat server.xml
+4.13	Restrict access to Tomcat tomcat-users.xml
+4.14	Restrict access to Tomcat web.xml
+5.2	    Use LockOut Realms
+6.2	    Ensure SSLEnabled is set to True for Sensitive Connectors
+6.3	    Ensure scheme is set accurately
+6.4	    Ensure secure is set to true only for SSL-enabled Connectors
+7.1	    Application specific logging
+7.2	    Specify file handler in logging.properties files
+7.3	    Ensure className is set correctly in context.xml
+7.5	    Ensure pattern in context.xml is correct
+7.6	    Ensure directory in logging.properties is a secure location
+8.1	    Restrict runtime access to sensitive packages
+10.2	Restrict access to the web administration application
+10.9	Configure connectionTimeout
+10.10	Configure maxHttpHeaderSize
+10.11	Force SSL for all applications
+10.14	Do not allow cross context requests
+10.15	Do not resolve hosts on logging valves
+10.16	Enable memory leak listener
+10.17	Setting Security Lifecycle Listener
+10.18	Use the logEffectiveWebXml and metadata-complete settings for deploying applications in production
