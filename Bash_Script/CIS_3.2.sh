@@ -3,19 +3,19 @@
 # Script per il controllo e fix del CIS Control 3.2
 # Disable the Shutdown port
 
-#Lo script implementa le seguenti funzionalità:
+# Lo script implementa le seguenti funzionalità:
 #
-#Verifica la configurazione della porta di shutdown:
+# Verifica la configurazione della porta di shutdown:
 #
-#Controlla se è presente l'attributo port nel tag Server
-#Verifica se la porta è impostata a -1 (disabilitata)
-#Controlla i permessi del file server.xml
-#Se necessario, offre l'opzione di fix automatico che:
-#Disabilita la porta di shutdown impostandola a -1
-#Corregge i permessi dei file (600)
-#Verifica le modifiche apportate
+# Controlla se è presente l'attributo port nel tag Server
+# Verifica se la porta è impostata a -1 (disabilitata)
+# Controlla i permessi del file server.xml
+# Se necessario, offre l'opzione di fix automatico che:
+# Disabilita la porta di shutdown impostandola a -1
+# Corregge i permessi dei file (600)
+# Verifica le modifiche apportate
 #
-#Crea backup dei file prima delle modifiche
+# Crea backup dei file prima delle modifiche
 
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
