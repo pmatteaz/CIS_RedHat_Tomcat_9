@@ -52,3 +52,58 @@ Gli script vengono forniti "così come sono", senza garanzie di alcun tipo. L'ut
 ---
 
 © 2024 - Rilasciato sotto licenza MIT
+
+# CIS Controls Verification Scripts for Apache Tomcat
+
+⚠️ **WARNING: PROJECT UNDER DEVELOPMENT** ⚠️
+
+## Project Status
+
+This repository contains a collection of bash scripts for verifying and automatically correcting CIS Controls for Apache Tomcat. The scripts are currently under active development and **are not ready for production use**.
+
+### Important Warnings
+
+- Scripts are in preliminary development phase and may contain errors
+- Proper functioning in all environments is not guaranteed
+- Unexpected behaviors may occur
+- It is recommended to test scripts in a development/test environment before any production use
+- Always perform a complete backup before using the scripts
+
+### Current Limitations
+
+- Scripts may not cover all possible use cases
+- Some custom configurations may not be handled properly
+- Compatibility with different Tomcat versions is not guaranteed
+- Rollback procedures may not be complete
+
+### Best Practices
+
+1. **Backup**: Always perform a complete system backup before using the scripts
+2. **Testing**: Test scripts in a non-production environment
+3. **Verification**: Manually verify results after execution
+4. **Documentation**: Document any changes made to the system
+
+### Contributing
+
+We are open to contributions and issue reports. If you encounter a problem or have suggestions for improvements, please:
+
+1. Open an issue describing the problem
+2. Provide details about the test environment
+3. Include logs and any error messages
+4. If possible, propose a solution
+
+### Disclaimer
+
+The scripts are provided "as is" without warranties of any kind. Use of the scripts is at your own risk. The authors assume no liability for any damages resulting from the use of the scripts.
+
+## Future Developments
+
+- Improved error handling
+- Addition of complete rollback procedures
+- Testing on different Tomcat versions
+- Detailed documentation for each script
+- Implementation of advanced logging
+
+---
+
+© 2024 - Released under MIT License
