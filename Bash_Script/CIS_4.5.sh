@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Controlla la proprietà della directory temporanea e dei suoi contenuti
+# Verifica i permessi (750 per le directory, 640 per i file)
+# Pulisce il contenuto della directory temporanea
+# Corregge la proprietà e le autorizzazioni se vengono rilevati problemi
+# Chiede conferma prima di apportare modifiche
+
+
 # Configuration
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 TEMP_DIR="$TOMCAT_HOME/temp"

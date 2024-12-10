@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# Controlla la proprietà della directory bin e dei suoi contenuti
+# Verifies permessi:
+# 750 per bin directory
+# 750 per script eseguibili (*.sh)
+# 640 per altri files
+# Corregge proprietà e permessi se necessario 
+# Crea un backup prima di apportare modifiche
+# Chiede conferma prima di applicare le correzioni
+
+
 # Configuration
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 BIN_DIR="$TOMCAT_HOME/bin"
