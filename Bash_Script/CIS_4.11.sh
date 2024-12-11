@@ -1,41 +1,135 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 4.11
+# Restrict access to Tomcat logging.properties
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica dettagliata delle autorizzazioni per:
+#   File logging.properties
+#   Directory padre (conf)
+#   Proprietà utente/gruppo
+#   Permessi specifici
+# 
+# Verifica della configurazione di logging:
+#   Presenza handlers obbligatori
+#   Uso appropriato dei livelli di logging
+#   Presenza di handlers potenzialmente non sicuri
+# 
+# Include una funzione di backup completa che:
+#   Crea un backup con timestamp
+#   Salva i permessi attuali
+#   Mantiene le ACL se disponibili
+#   Salva le configurazioni critiche
+#   Calcola l'hash SHA-256 del file
+# 
+# Controlli specifici per:
+#   File logging.properties: 600
+#   Directory padre: 750
+#   Proprietà: tomcat:tomcat
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-LOGGING_PROPERTIES="$TOMCAT_HOME/conf/logging.properties"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+LOGGING_PROPS="$TOMCAT_HOME/conf/logging.properties"
 
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$LOGGING_PROPERTIES" ]; then
-        echo -e "${RED}[ERROR] logging.properties not found: $LOGGING_PROPERTIES${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_ownership() {
-    local result=0
-    local owner=$(stat -c '%U' "$LOGGING_PROPERTIES")
-    local group=$(stat -c '%G' "$LOGGING_PROPERTIES")
-    
-    if [ "$owner" != "$TOMCAT_USER" ]; then
-        echo -e "${YELLOW}[WARN] Invalid owner: $owner (should be $TOMCAT_USER)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] File owner${NC}"
+check_tomcat_user() {
+    if ! id "$TOMCAT_USER" &>/dev/null; then
+        echo -e "${RED}[ERROR] Utente Tomcat ($TOMCAT_USER) non trovato${NC}"
+        exit 1
     fi
     
-    if [ "$group" != "$TOMCAT_GROUP" ]; then
-        echo -e "${YELLOW}[WARN] Invalid group: $group (should be $TOMCAT_GROUP)${NC}"
+    if ! getent group "$TOMCAT_GROUP" &>/dev/null; then
+        echo -e "${RED}[ERROR] Gruppo Tomcat ($TOMCAT_GROUP) non trovato${NC}"
+        exit 1
+    fi
+}
+
+check_file_exists() {
+    if [ ! -f "$LOGGING_PROPS" ]; then
+        echo -e "${RED}[ERROR] File logging.properties non trovato: $LOGGING_PROPS${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_logging_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/permissions_backup.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    # Crea directory di backup
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for logging.properties" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Tomcat User: $TOMCAT_USER" >> "$backup_file"
+    echo "# Tomcat Group: $TOMCAT_GROUP" >> "$backup_file"
+    echo >> "$backup_file"
+    
+    # Backup dei permessi attuali
+    ls -l "$LOGGING_PROPS" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$LOGGING_PROPS" > "${backup_dir}/logging_properties_acl.txt"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$LOGGING_PROPS" "${backup_dir}/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$LOGGING_PROPS" > "${backup_dir}/logging.properties.sha256"
+    fi
+    
+    # Verifica delle configurazioni di logging critiche
+    echo "### Critical Logging Settings" >> "$backup_file"
+    grep -E "^handlers|^.handlers|^java.util.logging" "$LOGGING_PROPS" >> "$backup_file"
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+    echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
+}
+
+check_logging_configuration() {
+    local result=0
+    
+    echo "Verifica configurazione logging..."
+    
+    # Verifica presenza configurazioni critiche
+    if ! grep -q "^handlers=" "$LOGGING_PROPS"; then
+        echo -e "${YELLOW}[WARN] Configurazione handlers non trovata${NC}"
         result=1
-    else
-        echo -e "${GREEN}[OK] File group${NC}"
+    fi
+    
+    # Verifica presenza configurazioni di logging inappropriate
+    if grep -q "ConsoleHandler" "$LOGGING_PROPS"; then
+        echo -e "${YELLOW}[WARN] ConsoleHandler trovato - considerare la rimozione in produzione${NC}"
+        result=1
+    fi
+    
+    # Verifica livelli di logging
+    if grep -q "\.level = FINE\|\.level = FINER\|\.level = FINEST" "$LOGGING_PROPS"; then
+        echo -e "${YELLOW}[WARN] Trovati livelli di logging dettagliati - considerare di aumentare il livello in produzione${NC}"
+        result=1
     fi
     
     return $result
@@ -43,119 +137,121 @@ check_ownership() {
 
 check_permissions() {
     local result=0
-    local perms=$(stat -c '%a' "$LOGGING_PROPERTIES")
     
-    if [ "$perms" != "640" ]; then
-        echo -e "${YELLOW}[WARN] Invalid permissions: $perms (should be 640)${NC}"
+    echo "Controllo permessi logging.properties..."
+    
+    # Controlla proprietario e gruppo
+    local file_owner=$(stat -c '%U' "$LOGGING_PROPS")
+    local file_group=$(stat -c '%G' "$LOGGING_PROPS")
+    local file_perms=$(stat -c '%a' "$LOGGING_PROPS")
+    
+    if [ "$file_owner" != "$TOMCAT_USER" ]; then
+        echo -e "${YELLOW}[WARN] Proprietario file non corretto: $file_owner (dovrebbe essere $TOMCAT_USER)${NC}"
         result=1
     else
-        echo -e "${GREEN}[OK] File permissions${NC}"
+        echo -e "${GREEN}[OK] Proprietario file corretto: $file_owner${NC}"
     fi
     
-    return $result
-}
-
-check_logging_config() {
-    local result=0
-    
-    # Check for essential logging handlers
-    local required_handlers=(
-        "handlers = "
-        "1catalina.org.apache.juli.AsyncFileHandler"
-        "2localhost.org.apache.juli.AsyncFileHandler"
-        "3manager.org.apache.juli.AsyncFileHandler"
-        "4host-manager.org.apache.juli.AsyncFileHandler"
-        "java.util.logging.ConsoleHandler"
-    )
-    
-    for handler in "${required_handlers[@]}"; do
-        if ! grep -q "$handler" "$LOGGING_PROPERTIES"; then
-            echo -e "${YELLOW}[WARN] Missing logging handler: $handler${NC}"
-            result=1
-        fi
-    done
-    
-    # Check log levels
-    if ! grep -q "\.level = INFO" "$LOGGING_PROPERTIES"; then
-        echo -e "${YELLOW}[WARN] Default log level should be set to INFO${NC}"
+    if [ "$file_group" != "$TOMCAT_GROUP" ]; then
+        echo -e "${YELLOW}[WARN] Gruppo file non corretto: $file_group (dovrebbe essere $TOMCAT_GROUP)${NC}"
         result=1
+    else
+        echo -e "${GREEN}[OK] Gruppo file corretto: $file_group${NC}"
+    fi
+    
+    if [ "$file_perms" != "600" ]; then
+        echo -e "${YELLOW}[WARN] Permessi file non corretti: $file_perms (dovrebbero essere 600)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
+    fi
+    
+    # Verifica directory padre
+    local parent_dir=$(dirname "$LOGGING_PROPS")
+    local parent_owner=$(stat -c '%U' "$parent_dir")
+    local parent_group=$(stat -c '%G' "$parent_dir")
+    local parent_perms=$(stat -c '%a' "$parent_dir")
+    
+    echo -e "\nControllo directory padre ($parent_dir):"
+    
+    if [ "$parent_owner" != "$TOMCAT_USER" ]; then
+        echo -e "${YELLOW}[WARN] Proprietario directory padre non corretto: $parent_owner (dovrebbe essere $TOMCAT_USER)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Proprietario directory padre corretto: $parent_owner${NC}"
+    fi
+    
+    if [ "$parent_group" != "$TOMCAT_GROUP" ]; then
+        echo -e "${YELLOW}[WARN] Gruppo directory padre non corretto: $parent_group (dovrebbe essere $TOMCAT_GROUP)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Gruppo directory padre corretto: $parent_group${NC}"
+    fi
+    
+    if [ "$parent_perms" != "750" ]; then
+        echo -e "${YELLOW}[WARN] Permessi directory padre non corretti: $parent_perms (dovrebbero essere 750)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Permessi directory padre corretti: $parent_perms${NC}"
     fi
     
     return $result
-}
-
-create_backup() {
-    local backup_file="${LOGGING_PROPERTIES}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$LOGGING_PROPERTIES" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_ownership() {
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOGGING_PROPERTIES"
-    echo -e "${GREEN}[OK] Fixed ownership${NC}"
 }
 
 fix_permissions() {
-    chmod 640 "$LOGGING_PROPERTIES"
-    echo -e "${GREEN}[OK] Fixed permissions${NC}"
-}
-
-print_current_status() {
-    echo -e "\n${YELLOW}Current Status:${NC}"
-    echo -e "File: $LOGGING_PROPERTIES"
-    echo -e "Owner: $(stat -c '%U' "$LOGGING_PROPERTIES")"
-    echo -e "Group: $(stat -c '%G' "$LOGGING_PROPERTIES")"
-    echo -e "Permissions: $(stat -c '%a' "$LOGGING_PROPERTIES")"
-}
-
-validate_logging_directory() {
-    local log_dir=$(grep "^[0-9]*catalina.org.apache.juli.AsyncFileHandler.directory" "$LOGGING_PROPERTIES" | cut -d= -f2 | tr -d ' ')
+    echo "Applicazione correzioni permessi..."
     
-    if [ -n "$log_dir" ] && [ -d "$log_dir" ]; then
-        local dir_perms=$(stat -c '%a' "$log_dir")
-        if [ "$dir_perms" != "750" ]; then
-            echo -e "${YELLOW}[WARN] Log directory $log_dir has incorrect permissions: $dir_perms (should be 750)${NC}"
-            return 1
-        fi
-    fi
-    return 0
+    # Crea backup prima di applicare le modifiche
+    create_backup
+    
+    # Correggi proprietario e gruppo
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOGGING_PROPS"
+    
+    # Imposta permessi stretti
+    chmod 600 "$LOGGING_PROPS"
+    
+    # Correggi permessi directory padre
+    local parent_dir=$(dirname "$LOGGING_PROPS")
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$parent_dir"
+    chmod 750 "$parent_dir"
+    
+    echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
+    
+    # Verifica le modifiche
+    echo -e "\nVerifica delle modifiche applicate:"
+    check_permissions
 }
 
 main() {
-    echo "CIS 4.11 Check - logging.properties Access"
-    echo "----------------------------------------"
+    echo "Controllo CIS 4.11 - Restrict access to Tomcat logging.properties"
+    echo "--------------------------------------------------------------"
     
+    check_root
+    check_tomcat_user
     check_file_exists
     
     local needs_fix=0
-    check_ownership
-    needs_fix=$((needs_fix + $?))
     
     check_permissions
-    needs_fix=$((needs_fix + $?))
+    needs_fix=$?
     
-    check_logging_config
-    needs_fix=$((needs_fix + $?))
-    
-    validate_logging_directory
+    check_logging_configuration
     needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            create_backup
-            fix_ownership
             fix_permissions
-            echo -e "\n${GREEN}Fix completed. Restart Tomcat to apply changes.${NC}"
-            echo -e "${YELLOW}[WARNING] Please review logging.properties contents manually${NC}"
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+            echo -e "${YELLOW}NOTA: Verificare manualmente la configurazione del logging per sicurezza${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
