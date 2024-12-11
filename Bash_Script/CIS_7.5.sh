@@ -1,178 +1,250 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 7.5
+# Ensure pattern in context.xml is correct
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica dei pattern in context.xml:
+#   Controllo configurazioni Resources
+#   Verifica JarScanner settings
+#   Controllo Manager settings
+#   Identificazione pattern insicuri
+# 
+# Controlli specifici:
+#   cachingAllowed e cacheMaxSize
+#   scanManifest, scanAllFiles e scanAllDirectories
+#   pathname e antiResourceLocking
+#   allowLinking e crossContext
+# 
+# Sistema di correzione:
+#   Backup delle configurazioni
+#   Applicazione pattern raccomandati
+#   Verifica sintassi XML
+#   Correzione di tutte le applicazioni web
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
-WEBAPPS_DIR="$TOMCAT_HOME/conf/Catalina"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
+WEBAPPS_DIR="$TOMCAT_HOME/webapps"
 
-# Colors for output
+# Pattern raccomandato per CachingAllowed e CacheMaxSize
+RECOMMENDED_PATTERN='
+    <Resources cachingAllowed="false" cacheMaxSize="0" />
+    <JarScanner scanManifest="false" scanAllFiles="true" scanAllDirectories="true" />
+    <Manager pathname="" antiResourceLocking="false" />'
+
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Recommended pattern for access logging
-RECOMMENDED_PATTERN='%h %l %t %u "%r" %s %b "%{Referer}i" "%{User-Agent}i"'
-
-check_file_exists() {
-    if [ ! -f "$CONTEXT_XML" ]; then
-        echo -e "${RED}[ERROR] context.xml not found: $CONTEXT_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_patterns() {
-    local result=0
-    
-    echo -e "\nChecking pattern attributes in context.xml files:"
-    
-    # Check main context.xml
-    echo -e "\nChecking main context.xml:"
-    check_single_file "$CONTEXT_XML"
-    result=$((result + $?))
-    
-    # Check application-specific context.xml files
-    if [ -d "$WEBAPPS_DIR" ]; then
-        for app_dir in "$WEBAPPS_DIR"/*; do
-            if [ -d "$app_dir" ]; then
-                local app_context="$app_dir/context.xml.default"
-                if [ -f "$app_context" ]; then
-                    echo -e "\nChecking $(basename "$app_dir") context.xml:"
-                    check_single_file "$app_context"
-                    result=$((result + $?))
-                fi
-            fi
-        done
+check_file_exists() {
+    if [ ! -f "$CONTEXT_XML" ]; then
+        echo -e "${RED}[ERROR] File context.xml non trovato: $CONTEXT_XML${NC}"
+        exit 1
     fi
-    
-    return $result
-}
-
-check_single_file() {
-    local file=$1
-    local result=0
-    
-    # Check if AccessLogValve is present
-    if ! grep -q "org.apache.catalina.valves.AccessLogValve" "$file"; then
-        echo -e "${YELLOW}[WARN] AccessLogValve not found in $file${NC}"
-        result=1
-    else
-        # Check pattern attribute
-        if ! grep -q "pattern=\".*\"" "$file"; then
-            echo -e "${YELLOW}[WARN] No pattern attribute found in AccessLogValve in $file${NC}"
-            result=1
-        else
-            local current_pattern=$(grep -o 'pattern="[^"]*"' "$file" | sed 's/pattern="\(.*\)"/\1/')
-            if [ "$current_pattern" != "$RECOMMENDED_PATTERN" ]; then
-                echo -e "${YELLOW}[WARN] Pattern does not match recommended format in $file${NC}"
-                echo -e "Current:     $current_pattern"
-                echo -e "Recommended: $RECOMMENDED_PATTERN"
-                result=1
-            else
-                echo -e "${GREEN}[OK] Pattern matches recommended format${NC}"
-            fi
-        fi
-    fi
-    
-    return $result
 }
 
 create_backup() {
-    local file=$1
-    local backup_file="${file}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$file" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_patterns() {
-    # Fix main context.xml
-    fix_single_file "$CONTEXT_XML"
+    local file="$1"
+    local backup_dir="/tmp/tomcat_context_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
     
-    # Fix application-specific context.xml files
-    if [ -d "$WEBAPPS_DIR" ]; then
-        for app_dir in "$WEBAPPS_DIR"/*; do
-            if [ -d "$app_dir" ]; then
-                local app_context="$app_dir/context.xml.default"
-                if [ -f "$app_context" ]; then
-                    fix_single_file "$app_context"
-                fi
-            fi
-        done
+    echo "Creazione backup della configurazione..."
+    
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for $file" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Original file: $file" >> "$backup_file"
+    ls -l "$file" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$file" > "${backup_dir}/$(basename "$file").acl"
     fi
+    
+    # Copia fisica del file
+    cp -p "$file" "$backup_dir/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$file" > "${backup_dir}/$(basename "$file").sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
 }
 
-fix_single_file() {
-    local file=$1
+check_context_pattern() {
+    local file="$1"
+    local result=0
+    
+    echo "Controllo pattern in $file..."
+    
+    # Verifica Resources tag
+    if ! grep -q "<Resources.*cachingAllowed=\"false\".*cacheMaxSize=\"0\"" "$file"; then
+        echo -e "${YELLOW}[WARN] Configurazione Resources non corretta o mancante${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Configurazione Resources corretta${NC}"
+    fi
+    
+    # Verifica JarScanner tag
+    if ! grep -q "<JarScanner.*scanManifest=\"false\".*scanAllFiles=\"true\".*scanAllDirectories=\"true\"" "$file"; then
+        echo -e "${YELLOW}[WARN] Configurazione JarScanner non corretta o mancante${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Configurazione JarScanner corretta${NC}"
+    fi
+    
+    # Verifica Manager tag
+    if ! grep -q "<Manager.*pathname=\"\".*antiResourceLocking=\"false\"" "$file"; then
+        echo -e "${YELLOW}[WARN] Configurazione Manager non corretta o mancante${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Configurazione Manager corretta${NC}"
+    fi
+    
+    # Verifica altri pattern di sicurezza
+    if grep -q "allowLinking=\"true\"" "$file"; then
+        echo -e "${YELLOW}[WARN] allowLinking è impostato a true - potenziale rischio di sicurezza${NC}"
+        result=1
+    fi
+    
+    if grep -q "crossContext=\"true\"" "$file"; then
+        echo -e "${YELLOW}[WARN] crossContext è impostato a true - potenziale rischio di sicurezza${NC}"
+        result=1
+    fi
+    
+    return $result
+}
+
+fix_context_pattern() {
+    local file="$1"
+    
+    echo "Correzione pattern in $file..."
+    
+    # File temporaneo per le modifiche
     local temp_file=$(mktemp)
     
-    create_backup "$file"
+    # Leggi il file e mantieni la struttura esistente
+    while IFS= read -r line; do
+        if [[ $line =~ \</Context\> ]]; then
+            # Aggiungi le configurazioni raccomandate prima della chiusura del tag Context
+            echo "$RECOMMENDED_PATTERN" >> "$temp_file"
+            echo "$line" >> "$temp_file"
+        elif [[ $line =~ \<Resources || $line =~ \<JarScanner || $line =~ \<Manager ]]; then
+            # Salta le configurazioni esistenti che verranno sostituite
+            continue
+        else
+            echo "$line" >> "$temp_file"
+        fi
+    done < "$file"
     
-    if ! grep -q "org.apache.catalina.valves.AccessLogValve" "$file"; then
-        # Add AccessLogValve if not present
-        sed '/<\/Context>/i\    <Valve className="org.apache.catalina.valves.AccessLogValve" \
-        pattern="'"$RECOMMENDED_PATTERN"'" \
-        directory="${catalina.base}/logs" \
-        prefix="access_log" suffix=".txt" \
-        rotatable="true" renameOnRotate="true" \
-        fileDateFormat="yyyy-MM-dd" />' "$file" > "$temp_file"
-    else
-        # Update existing pattern
-        sed 's/pattern="[^"]*"/pattern="'"$RECOMMENDED_PATTERN"'"/' "$file" > "$temp_file"
-    fi
-    
+    # Sostituisci il file originale
     mv "$temp_file" "$file"
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$file"
-    chmod 640 "$file"
     
-    echo -e "${GREEN}[OK] Updated pattern in $file${NC}"
+    # Imposta permessi corretti
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$file"
+    chmod 600 "$file"
+    
+    echo -e "${GREEN}[OK] Pattern corretto applicato${NC}"
 }
 
-print_current_status() {
-    echo -e "\nCurrent AccessLogValve Configuration:"
-    echo -e "\nMain context.xml:"
-    grep -A 3 "AccessLogValve" "$CONTEXT_XML" | sed 's/^/  /'
+check_webapp_contexts() {
+    local result=0
     
-    if [ -d "$WEBAPPS_DIR" ]; then
-        for app_dir in "$WEBAPPS_DIR"/*; do
-            if [ -d "$app_dir" ]; then
-                local app_context="$app_dir/context.xml.default"
-                if [ -f "$app_context" ]; then
-                    echo -e "\n$(basename "$app_dir") context.xml:"
-                    grep -A 3 "AccessLogValve" "$app_context" | sed 's/^/  /'
-                fi
-            fi
-        done
+    echo "Controllo context.xml nelle applicazioni web..."
+    
+    # Cerca tutti i context.xml nelle applicazioni web
+    find "$WEBAPPS_DIR" -name "context.xml" -type f | while read -r ctx_file; do
+        echo -e "\nControllo $ctx_file..."
+        check_context_pattern "$ctx_file"
+        result=$((result + $?))
+    done
+    
+    return $result
+}
+
+fix_webapp_contexts() {
+    echo "Correzione context.xml nelle applicazioni web..."
+    
+    # Correggi tutti i context.xml nelle applicazioni web
+    find "$WEBAPPS_DIR" -name "context.xml" -type f | while read -r ctx_file; do
+        echo -e "\nCorrezione $ctx_file..."
+        create_backup "$ctx_file"
+        fix_context_pattern "$ctx_file"
+    done
+}
+
+verify_xml_syntax() {
+    local file="$1"
+    
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$file" 2>/dev/null; then
+            echo -e "${RED}[ERROR] Errore di sintassi XML in $file${NC}"
+            return 1
+        fi
+        echo -e "${GREEN}[OK] Sintassi XML corretta in $file${NC}"
+    else
+        echo -e "${YELLOW}[WARN] xmllint non disponibile, skip verifica sintassi XML${NC}"
     fi
+    
+    return 0
 }
 
 main() {
-    echo "CIS 7.5 Check - Access Log Pattern Configuration"
-    echo "---------------------------------------------"
+    echo "Controllo CIS 7.5 - Ensure pattern in context.xml is correct"
+    echo "-------------------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_patterns
+    
+    check_context_pattern "$CONTEXT_XML"
     needs_fix=$?
     
+    check_webapp_contexts
+    needs_fix=$((needs_fix + $?))
+    
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            fix_patterns
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review access log patterns"
-            echo -e "2. Verify log rotation settings"
-            echo -e "3. Restart Tomcat to apply changes"
+            create_backup "$CONTEXT_XML"
+            fix_context_pattern "$CONTEXT_XML"
+            fix_webapp_contexts
+            
+            if verify_xml_syntax "$CONTEXT_XML"; then
+                echo -e "\n${GREEN}Fix completato.${NC}"
+                echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Verificare il funzionamento delle applicazioni${NC}"
+            else
+                echo -e "\n${RED}[ERROR] Errore durante l'applicazione delle modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Ripristinare il backup e verificare manualmente la configurazione${NC}"
+            fi
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
