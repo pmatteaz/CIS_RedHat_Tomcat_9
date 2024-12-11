@@ -1,212 +1,224 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 10.17
+# Security Lifecycle Listener
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica della configurazione di sicurezza:
+#   Controllo presenza del SecurityListener
+#   Verifica impostazione minimumUmask
+#   Verifica checkedOsUsers
+#   Controllo umask del sistema
+# 
+# Funzionalità di correzione:
+#   Configurazione del SecurityListener in server.xml
+#   Impostazione umask corretto (0007)
+#   Configurazione automatica in setenv.sh
+# 
+# Sistema di backup:
+#   Backup di server.xml prima delle modifiche
+#   Backup con timestamp
+#   Verifica dell'integrità tramite hash
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
-# Security Lifecycle Listener class
-LISTENER_CLASS="org.apache.catalina.security.SecurityListener"
-
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Default security values
-UMASK="0007"
-MIN_UMASK="0007"
+# Configurazione del Security Lifecycle Listener
+SECURITY_LISTENER='<Listener className="org.apache.catalina.security.SecurityListener" minimumUmask="0007" checkedOsUsers="tomcat" />'
+
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
+        exit 1
+    fi
+}
+
+check_tomcat_user() {
+    if ! id "$TOMCAT_USER" &>/dev/null; then
+        echo -e "${RED}[ERROR] Utente Tomcat ($TOMCAT_USER) non trovato${NC}"
+        exit 1
+    fi
+    
+    if ! getent group "$TOMCAT_GROUP" &>/dev/null; then
+        echo -e "${RED}[ERROR] Gruppo Tomcat ($TOMCAT_GROUP) non trovato${NC}"
+        exit 1
+    fi
+}
 
 check_file_exists() {
     if [ ! -f "$SERVER_XML" ]; then
-        echo -e "${RED}[ERROR] server.xml not found: $SERVER_XML${NC}"
+        echo -e "${RED}[ERROR] File server.xml non trovato: $SERVER_XML${NC}"
         exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_security_listener_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/permissions_backup.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    # Crea directory di backup
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for server.xml" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Tomcat User: $TOMCAT_USER" >> "$backup_file"
+    echo "# Tomcat Group: $TOMCAT_GROUP" >> "$backup_file"
+    echo >> "$backup_file"
+    
+    # Backup dei permessi attuali
+    ls -l "$SERVER_XML" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$SERVER_XML" > "${backup_dir}/server_xml_acl.txt"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$SERVER_XML" "${backup_dir}/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+    echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
+}
+
+check_umask() {
+    local current_umask=$(umask)
+    if [ "$current_umask" != "0007" ]; then
+        echo -e "${YELLOW}[WARN] umask corrente ($current_umask) non è 0007${NC}"
+        return 1
+    else
+        echo -e "${GREEN}[OK] umask corrente è corretto (0007)${NC}"
+        return 0
     fi
 }
 
 check_security_listener() {
     local result=0
     
-    echo -e "\nChecking Security Lifecycle Listener configuration:"
+    echo "Controllo Security Lifecycle Listener..."
     
-    # Check if listener is present
-    if ! grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        echo -e "${YELLOW}[WARN] Security Lifecycle Listener not configured${NC}"
+    # Verifica presenza del SecurityListener
+    if ! grep -q "org.apache.catalina.security.SecurityListener" "$SERVER_XML"; then
+        echo -e "${YELLOW}[WARN] SecurityListener non configurato${NC}"
         result=1
     else
-        echo -e "${GREEN}[OK] Security Lifecycle Listener found${NC}"
+        echo -e "${GREEN}[OK] SecurityListener trovato${NC}"
         
-        # Check security attributes
-        local listener_line=$(grep "$LISTENER_CLASS" "$SERVER_XML")
-        
-        # Check checkedOsUsers
-        if ! echo "$listener_line" | grep -q "checkedOsUsers="; then
-            echo -e "${YELLOW}[WARN] checkedOsUsers not configured${NC}"
+        # Verifica minimumUmask
+        if ! grep -q 'minimumUmask="0007"' "$SERVER_XML"; then
+            echo -e "${YELLOW}[WARN] minimumUmask non configurato correttamente${NC}"
             result=1
+        else
+            echo -e "${GREEN}[OK] minimumUmask configurato correttamente${NC}"
         fi
         
-        # Check minimumUmask
-        if ! echo "$listener_line" | grep -q "minimumUmask=\"$MIN_UMASK\""; then
-            echo -e "${YELLOW}[WARN] minimumUmask not set to $MIN_UMASK${NC}"
+        # Verifica checkedOsUsers
+        if ! grep -q "checkedOsUsers=\"$TOMCAT_USER\"" "$SERVER_XML"; then
+            echo -e "${YELLOW}[WARN] checkedOsUsers non configurato correttamente${NC}"
             result=1
+        else
+            echo -e "${GREEN}[OK] checkedOsUsers configurato correttamente${NC}"
         fi
-    fi
-    
-    # Check actual system umask
-    local current_umask=$(umask)
-    if [[ "$current_umask" != "$UMASK" ]]; then
-        echo -e "${YELLOW}[WARN] System umask ($current_umask) does not match required umask ($UMASK)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] System umask is correctly set${NC}"
     fi
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${SERVER_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$SERVER_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
+fix_umask() {
+    echo "Configurazione umask..."
+    
+    # Aggiungi configurazione umask ai file di avvio di Tomcat
+    local setenv_file="$TOMCAT_HOME/bin/setenv.sh"
+    
+    if [ ! -f "$setenv_file" ]; then
+        echo "#!/bin/bash" > "$setenv_file"
+        echo "umask 0007" >> "$setenv_file"
+        chmod +x "$setenv_file"
+        echo -e "${GREEN}[OK] Creato $setenv_file con umask 0007${NC}"
+    else
+        if ! grep -q "umask 0007" "$setenv_file"; then
+            echo "umask 0007" >> "$setenv_file"
+            echo -e "${GREEN}[OK] Aggiunto umask 0007 a $setenv_file${NC}"
+        fi
+    fi
+    
+    # Imposta umask per la sessione corrente
+    umask 0007
 }
 
 fix_security_listener() {
+    echo "Configurazione Security Lifecycle Listener..."
+    
+    # Crea backup prima delle modifiche
     create_backup
     
-    local temp_file=$(mktemp)
+    # Rimuovi eventuali configurazioni esistenti del SecurityListener
+    sed -i '/<Listener.*SecurityListener.*\/>/d' "$SERVER_XML"
     
-    if ! grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        # Add Security Lifecycle Listener if not present
-        sed '/<Server/a \    <Listener className="'"$LISTENER_CLASS"'" \
-        checkedOsUsers="tomcat" \
-        minimumUmask="'"$MIN_UMASK"'" />' "$SERVER_XML" > "$temp_file"
+    # Aggiungi il nuovo SecurityListener dopo il tag Server
+    sed -i "/<Server/a\\    $SECURITY_LISTENER" "$SERVER_XML"
+    
+    echo -e "${GREEN}[OK] SecurityListener configurato${NC}"
+    
+    # Verifica la configurazione
+    if grep -q "org.apache.catalina.security.SecurityListener" "$SERVER_XML"; then
+        echo -e "${GREEN}[OK] Verifica configurazione completata${NC}"
     else
-        # Update existing Security Lifecycle Listener
-        sed -E '/'"$LISTENER_CLASS"'/ {
-            s/minimumUmask="[^"]*"/minimumUmask="'"$MIN_UMASK"'"/g
-            /checkedOsUsers=/! s/\/>/ checkedOsUsers="tomcat"\/>/g
-        }' "$SERVER_XML" > "$temp_file"
-    fi
-    
-    # Apply changes
-    mv "$temp_file" "$SERVER_XML"
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    chmod 640 "$SERVER_XML"
-    
-    # Update system umask if needed
-    if [[ "$(umask)" != "$UMASK" ]]; then
-        echo -e "${YELLOW}[INFO] Updating system umask...${NC}"
-        umask "$UMASK"
-        
-        # Add umask to Tomcat service file if it exists
-        if [ -f "/etc/systemd/system/tomcat.service" ]; then
-            sed -i "/\[Service\]/a UMask=$UMASK" "/etc/systemd/system/tomcat.service"
-            systemctl daemon-reload
-        fi
-        
-        # Add umask to startup scripts
-        for script in "$TOMCAT_HOME/bin/"*.sh; do
-            if [ -f "$script" ]; then
-                if ! grep -q "umask $UMASK" "$script"; then
-                    sed -i "2i umask $UMASK" "$script"
-                fi
-            fi
-        done
-    fi
-    
-    echo -e "${GREEN}[OK] Security Lifecycle Listener configuration updated${NC}"
-}
-
-verify_configuration() {
-    echo -e "\nVerifying configuration:"
-    
-    if grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        echo -e "${GREEN}[OK] Security Lifecycle Listener is configured${NC}"
-        grep -A 1 "$LISTENER_CLASS" "$SERVER_XML" | sed 's/^/  /'
-        
-        # Verify umask
-        if [[ "$(umask)" == "$UMASK" ]]; then
-            echo -e "${GREEN}[OK] System umask is correct${NC}"
-        else
-            echo -e "${YELLOW}[WARN] System umask is not correct. Please restart Tomcat${NC}"
-        fi
-        
-        # Verify service file
-        if [ -f "/etc/systemd/system/tomcat.service" ]; then
-            if grep -q "UMask=$UMASK" "/etc/systemd/system/tomcat.service"; then
-                echo -e "${GREEN}[OK] Service file umask is correct${NC}"
-            else
-                echo -e "${YELLOW}[WARN] Service file umask not set${NC}"
-            fi
-        fi
-        
-        # Verify startup scripts
-        local scripts_ok=true
-        for script in "$TOMCAT_HOME/bin/"*.sh; do
-            if [ -f "$script" ] && ! grep -q "umask $UMASK" "$script"; then
-                scripts_ok=false
-                break
-            fi
-        done
-        if [ "$scripts_ok" = true ]; then
-            echo -e "${GREEN}[OK] Startup scripts umask is correct${NC}"
-        else
-            echo -e "${YELLOW}[WARN] Some startup scripts missing umask${NC}"
-        fi
-    else
-        echo -e "${RED}[ERROR] Security Lifecycle Listener not found after fix${NC}"
-    fi
-}
-
-print_current_status() {
-    echo -e "\nCurrent Security Configuration:"
-    echo -e "Current system umask: $(umask)"
-    
-    if grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        echo -e "\nSecurity Lifecycle Listener configuration:"
-        grep -A 1 "$LISTENER_CLASS" "$SERVER_XML" | sed 's/^/  /'
-    else
-        echo -e "${YELLOW}  Security Lifecycle Listener not configured${NC}"
-    fi
-    
-    if [ -f "/etc/systemd/system/tomcat.service" ]; then
-        echo -e "\nService file umask setting:"
-        grep "UMask" "/etc/systemd/system/tomcat.service" 2>/dev/null | sed 's/^/  /' || echo "  No UMask setting found"
+        echo -e "${RED}[ERROR] Errore nella configurazione del SecurityListener${NC}"
     fi
 }
 
 main() {
-    echo "CIS 10.17 Check - Security Lifecycle Listener"
-    echo "------------------------------------------"
+    echo "Controllo CIS 10.17 - Security Lifecycle Listener"
+    echo "-----------------------------------------------"
     
+    check_root
+    check_tomcat_user
     check_file_exists
     
     local needs_fix=0
+    
+    check_umask
+    needs_fix=$((needs_fix + $?))
+    
     check_security_listener
-    needs_fix=$?
+    needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
+            fix_umask
             fix_security_listener
-            verify_configuration
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review security listener settings"
-            echo -e "2. Verify umask settings"
-            echo -e "3. Check service configuration"
-            echo -e "4. Review startup scripts"
-            echo -e "5. Restart Tomcat to apply changes"
-            echo -e "\n${YELLOW}[WARNING] Update the checkedOsUsers list according to your environment${NC}"
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+            echo -e "${YELLOW}NOTA: Verificare che il SecurityListener sia caricato correttamente nei log${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
