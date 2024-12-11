@@ -5,16 +5,16 @@
 #
 # Lo script implementa le seguenti funzionalità:
 # Verifica la presenza di pagine di errore personalizzate
-# Controlla la configurazione della gestione degli errori in web.xml
+#   Controlla la configurazione della gestione degli errori in web.xml
 # Se necessario, offre l'opzione di fix automatico che:
-# Crea pagine di errore base (404.jsp, 500.jsp, error.jsp)
-# Configura il mapping degli errori in web.xml
+#   Crea pagine di errore base (404.jsp, 500.jsp, error.jsp)
+#   Configura il mapping degli errori in web.xml
 #
 # Crea backup dei file prima delle modifiche
 # Lo script verifica e implementa:
-# Gestione generica delle eccezioni (Throwable)
-# Pagine di errore personalizzate per 404 e 500
-# Configurazione appropriata in web.xml
+#   Gestione generica delle eccezioni (Throwable)
+#   Pagine di errore personalizzate per 404 e 500
+#   Configurazione appropriata in web.xml
 #
 
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
