@@ -1,41 +1,159 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 4.12
+# Restrict access to Tomcat server.xml
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica dettagliata delle autorizzazioni per:
+#   File server.xml
+#   Proprietà utente/gruppo
+#   Permessi specifici
+#   Immutabilità del file
+# 
+# Verifica della configurazione:
+#   Sintassi XML
+#   Configurazioni critiche (porte, SSL, AJP)
+#   Impostazioni di sicurezza
+# 
+# Include una funzione di backup completa che:
+#   Crea un backup con timestamp
+#   Salva i permessi attuali
+#   Mantiene le ACL se disponibili
+#   Analizza le configurazioni sensibili
+#   Calcola l'hash SHA-256 del file
+# 
+# Controlli specifici per:
+#   File server.xml: 600
+#   Proprietà: tomcat:tomcat
+#   Attributo immutabile
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$SERVER_XML" ]; then
-        echo -e "${RED}[ERROR] server.xml not found: $SERVER_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_ownership() {
-    local result=0
-    local owner=$(stat -c '%U' "$SERVER_XML")
-    local group=$(stat -c '%G' "$SERVER_XML")
-    
-    if [ "$owner" != "$TOMCAT_USER" ]; then
-        echo -e "${YELLOW}[WARN] Invalid owner: $owner (should be $TOMCAT_USER)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] File owner${NC}"
+check_tomcat_user() {
+    if ! id "$TOMCAT_USER" &>/dev/null; then
+        echo -e "${RED}[ERROR] Utente Tomcat ($TOMCAT_USER) non trovato${NC}"
+        exit 1
     fi
     
-    if [ "$group" != "$TOMCAT_GROUP" ]; then
-        echo -e "${YELLOW}[WARN] Invalid group: $group (should be $TOMCAT_GROUP)${NC}"
-        result=1
+    if ! getent group "$TOMCAT_GROUP" &>/dev/null; then
+        echo -e "${RED}[ERROR] Gruppo Tomcat ($TOMCAT_GROUP) non trovato${NC}"
+        exit 1
+    fi
+}
+
+check_file_exists() {
+    if [ ! -f "$SERVER_XML" ]; then
+        echo -e "${RED}[ERROR] File server.xml non trovato: $SERVER_XML${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_server_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/permissions_backup.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    # Crea directory di backup
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for server.xml" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Tomcat User: $TOMCAT_USER" >> "$backup_file"
+    echo "# Tomcat Group: $TOMCAT_GROUP" >> "$backup_file"
+    echo >> "$backup_file"
+    
+    # Backup dei permessi attuali
+    ls -l "$SERVER_XML" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$SERVER_XML" > "${backup_dir}/server_xml_acl.txt"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$SERVER_XML" "${backup_dir}/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
+    fi
+    
+    # Analisi configurazioni sensibili
+    echo "### Sensitive Configuration Analysis" >> "$backup_file"
+    echo "Connectors:" >> "$backup_file"
+    grep -A 5 "<Connector" "$SERVER_XML" >> "$backup_file"
+    echo "Listeners:" >> "$backup_file"
+    grep -A 2 "<Listener" "$SERVER_XML" >> "$backup_file"
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+    echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
+}
+
+check_xml_syntax() {
+    local result=0
+    
+    echo "Verifica sintassi XML..."
+    
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$SERVER_XML" 2>/dev/null; then
+            echo -e "${YELLOW}[WARN] File server.xml contiene errori di sintassi XML${NC}"
+            result=1
+        else
+            echo -e "${GREEN}[OK] Sintassi XML corretta${NC}"
+        fi
     else
-        echo -e "${GREEN}[OK] File group${NC}"
+        echo -e "${YELLOW}[INFO] xmllint non disponibile, skip verifica sintassi XML${NC}"
+    fi
+    
+    return $result
+}
+
+check_critical_settings() {
+    local result=0
+    
+    echo "Verifica configurazioni critiche..."
+    
+    # Verifica shutdown port
+    if grep -q 'port="8005"' "$SERVER_XML"; then
+        echo -e "${YELLOW}[WARN] Shutdown port default (8005) rilevata${NC}"
+        result=1
+    fi
+    
+    # Verifica presenza AJP non protetto
+    if grep -q '<Connector protocol="AJP/1.3"' "$SERVER_XML" && ! grep -q 'secretRequired="true"' "$SERVER_XML"; then
+        echo -e "${YELLOW}[WARN] Connettore AJP senza secret rilevato${NC}"
+        result=1
+    fi
+    
+    # Verifica SSL settings
+    if grep -q 'SSLEnabled="true"' "$SERVER_XML"; then
+        if ! grep -q 'sslProtocol="TLS"' "$SERVER_XML"; then
+            echo -e "${YELLOW}[WARN] SSL abilitato ma protocollo TLS non specificato${NC}"
+            result=1
+        fi
     fi
     
     return $result
@@ -43,121 +161,112 @@ check_ownership() {
 
 check_permissions() {
     local result=0
-    local perms=$(stat -c '%a' "$SERVER_XML")
     
-    if [ "$perms" != "640" ]; then
-        echo -e "${YELLOW}[WARN] Invalid permissions: $perms (should be 640)${NC}"
+    echo "Controllo permessi server.xml..."
+    
+    # Controlla proprietario e gruppo
+    local file_owner=$(stat -c '%U' "$SERVER_XML")
+    local file_group=$(stat -c '%G' "$SERVER_XML")
+    local file_perms=$(stat -c '%a' "$SERVER_XML")
+    
+    if [ "$file_owner" != "$TOMCAT_USER" ]; then
+        echo -e "${YELLOW}[WARN] Proprietario file non corretto: $file_owner (dovrebbe essere $TOMCAT_USER)${NC}"
         result=1
     else
-        echo -e "${GREEN}[OK] File permissions${NC}"
+        echo -e "${GREEN}[OK] Proprietario file corretto: $file_owner${NC}"
+    fi
+    
+    if [ "$file_group" != "$TOMCAT_GROUP" ]; then
+        echo -e "${YELLOW}[WARN] Gruppo file non corretto: $file_group (dovrebbe essere $TOMCAT_GROUP)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Gruppo file corretto: $file_group${NC}"
+    fi
+    
+    if [ "$file_perms" != "600" ]; then
+        echo -e "${YELLOW}[WARN] Permessi file non corretti: $file_perms (dovrebbero essere 600)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
+    fi
+    
+    # Verifica immutabilità del file
+    if command -v lsattr &> /dev/null; then
+        local immutable=$(lsattr "$SERVER_XML" 2>/dev/null | cut -c5)
+        if [ "$immutable" != "i" ]; then
+            echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
+            result=1
+        else
+            echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
+        fi
     fi
     
     return $result
-}
-
-check_server_config() {
-    local result=0
-    
-    # Check for critical security configurations
-    local security_checks=(
-        "<Connector.*secure=\"true\""
-        "<Connector.*SSLEnabled=\"true\""
-        "<Connector.*scheme=\"https\""
-        "shutdown=\"NONDETERMINISTICVALUE\""  # Should not be "SHUTDOWN"
-    )
-    
-    for check in "${security_checks[@]}"; do
-        if ! grep -q "$check" "$SERVER_XML"; then
-            echo -e "${YELLOW}[WARN] Recommended security configuration missing: $check${NC}"
-            result=1
-        fi
-    done
-    
-    # Check for insecure configurations
-    local insecure_patterns=(
-        "allowTrace=\"true\""
-        "enableLookups=\"true\""
-        "server=\"Apache Tomcat\""  # Default server value
-        "shutdown=\"SHUTDOWN\""     # Default shutdown value
-    )
-    
-    for pattern in "${insecure_patterns[@]}"; do
-        if grep -q "$pattern" "$SERVER_XML"; then
-            echo -e "${YELLOW}[WARN] Potentially insecure configuration found: $pattern${NC}"
-            result=1
-        fi
-    done
-    
-    return $result
-}
-
-create_backup() {
-    local backup_file="${SERVER_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$SERVER_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_ownership() {
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    echo -e "${GREEN}[OK] Fixed ownership${NC}"
 }
 
 fix_permissions() {
-    chmod 640 "$SERVER_XML"
-    echo -e "${GREEN}[OK] Fixed permissions${NC}"
-}
-
-print_current_status() {
-    echo -e "\n${YELLOW}Current Status:${NC}"
-    echo -e "File: $SERVER_XML"
-    echo -e "Owner: $(stat -c '%U' "$SERVER_XML")"
-    echo -e "Group: $(stat -c '%G' "$SERVER_XML")"
-    echo -e "Permissions: $(stat -c '%a' "$SERVER_XML")"
+    echo "Applicazione correzioni permessi..."
     
-    # Additional security checks
-    echo -e "\nSecurity Configuration Status:"
-    if grep -q "shutdown=\"SHUTDOWN\"" "$SERVER_XML"; then
-        echo -e "${YELLOW}- Default shutdown command detected${NC}"
+    # Crea backup prima di applicare le modifiche
+    create_backup
+    
+    # Rimuovi immutabilità se presente
+    if command -v chattr &> /dev/null; then
+        chattr -i "$SERVER_XML" 2>/dev/null
     fi
     
-    if ! grep -q "<Connector.*SSLEnabled=\"true\"" "$SERVER_XML"; then
-        echo -e "${YELLOW}- SSL might not be properly configured${NC}"
+    # Correggi proprietario e gruppo
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
+    
+    # Imposta permessi stretti
+    chmod 600 "$SERVER_XML"
+    
+    # Imposta immutabilità
+    if command -v chattr &> /dev/null; then
+        chattr +i "$SERVER_XML"
+        echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
     fi
+    
+    echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
+    
+    # Verifica le modifiche
+    echo -e "\nVerifica delle modifiche applicate:"
+    check_permissions
 }
 
 main() {
-    echo "CIS 4.12 Check - server.xml Access"
-    echo "---------------------------------"
+    echo "Controllo CIS 4.12 - Restrict access to Tomcat server.xml"
+    echo "-------------------------------------------------------"
     
+    check_root
+    check_tomcat_user
     check_file_exists
     
     local needs_fix=0
-    check_ownership
-    needs_fix=$((needs_fix + $?))
     
     check_permissions
+    needs_fix=$?
+    
+    check_xml_syntax
     needs_fix=$((needs_fix + $?))
     
-    check_server_config
+    check_critical_settings
     needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            create_backup
-            fix_ownership
             fix_permissions
-            echo -e "\n${GREEN}Fix completed. Restart Tomcat to apply changes.${NC}"
-            echo -e "${YELLOW}[WARNING] Please review server.xml contents manually for security configuration${NC}"
-            echo -e "${YELLOW}[INFO] Backup created at ${SERVER_XML}.*.bak${NC}"
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+            echo -e "${YELLOW}NOTA: Verificare manualmente le configurazioni critiche evidenziate${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
