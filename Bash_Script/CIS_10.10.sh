@@ -1,141 +1,207 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 10.10
+# Configure maxHttpHeaderSize
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica della configurazione maxHttpHeaderSize:
+#   Controlla tutti i connettori in server.xml
+#   Verifica il valore configurato (8KB raccomandato)
+#   Identifica connettori mancanti della configurazione
+# 
+# Funzionalità di correzione:
+#   Imposta il valore raccomandato per tutti i connettori
+#   Aggiunge il parametro se mancante
+#   Verifica la sintassi XML dopo le modifiche
+# 
+# Sistema di backup:
+#   Backup completo di server.xml
+#   Salvataggio delle ACL
+#   Verifica dell'integrità tramite hash
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
-# Recommended max header size in bytes (8KB)
-RECOMMENDED_SIZE=8192
+# Valore raccomandato per maxHttpHeaderSize (8KB)
+MAX_HEADER_SIZE="8192"
 
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$SERVER_XML" ]; then
-        echo -e "${RED}[ERROR] server.xml not found: $SERVER_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_max_header_size() {
+check_file_exists() {
+    if [ ! -f "$SERVER_XML" ]; then
+        echo -e "${RED}[ERROR] File server.xml non trovato: $SERVER_XML${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_header_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for server.xml" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Original file: $SERVER_XML" >> "$backup_file"
+    echo "# Tomcat User: $TOMCAT_USER" >> "$backup_file"
+    echo "# Tomcat Group: $TOMCAT_GROUP" >> "$backup_file"
+    ls -l "$SERVER_XML" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$SERVER_XML" > "${backup_dir}/server_xml.acl"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$SERVER_XML" "$backup_dir/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+}
+
+check_header_size() {
     local result=0
     
-    echo -e "\nChecking maxHttpHeaderSize settings:"
+    echo "Controllo configurazione maxHttpHeaderSize..."
     
-    # Check all HTTP Connector elements
-    while IFS= read -r connector; do
-        local port=$(echo "$connector" | grep -oP 'port="\K[^"]+')
-        local protocol=$(echo "$connector" | grep -oP 'protocol="\K[^"]+' || echo "HTTP/1.1")
-        local max_size=$(echo "$connector" | grep -oP 'maxHttpHeaderSize="\K[^"]+' || echo "0")
-        
-        echo -e "\nChecking Connector (Port: $port, Protocol: $protocol):"
-        
-        if [ -z "$max_size" ] || [ "$max_size" == "0" ]; then
-            echo -e "${YELLOW}[WARN] maxHttpHeaderSize not set for port $port${NC}"
-            result=1
-        elif [ "$max_size" -gt "$RECOMMENDED_SIZE" ]; then
-            echo -e "${YELLOW}[WARN] maxHttpHeaderSize too large ($max_size bytes) for port $port${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] maxHttpHeaderSize properly configured ($max_size bytes)${NC}"
+    # Controlla tutti i connettori
+    while IFS= read -r line; do
+        if [[ $line =~ \<Connector ]]; then
+            echo -e "\nAnalisi connettore:"
+            echo "$line"
+            
+            if [[ $line =~ maxHttpHeaderSize=\"([0-9]+)\" ]]; then
+                local size="${BASH_REMATCH[1]}"
+                if [ "$size" -gt "$MAX_HEADER_SIZE" ]; then
+                    echo -e "${YELLOW}[WARN] maxHttpHeaderSize ($size) è maggiore del valore raccomandato ($MAX_HEADER_SIZE)${NC}"
+                    result=1
+                elif [ "$size" -lt "$MAX_HEADER_SIZE" ]; then
+                    echo -e "${YELLOW}[WARN] maxHttpHeaderSize ($size) è minore del valore raccomandato ($MAX_HEADER_SIZE)${NC}"
+                    result=1
+                else
+                    echo -e "${GREEN}[OK] maxHttpHeaderSize configurato correttamente${NC}"
+                fi
+            else
+                echo -e "${YELLOW}[WARN] maxHttpHeaderSize non configurato per questo connettore${NC}"
+                result=1
+            fi
+            
+            # Verifica altri parametri correlati alla sicurezza
+            if [[ $line =~ protocol=\"([^\"]+)\" ]]; then
+                local protocol="${BASH_REMATCH[1]}"
+                echo -e "Protocollo configurato: $protocol"
+            fi
         fi
-    done < <(grep -E "<Connector[^>]+protocol=\"HTTP/1\.1\"" "$SERVER_XML")
+    done < "$SERVER_XML"
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${SERVER_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$SERVER_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_max_header_size() {
+fix_header_size() {
+    echo "Applicazione configurazione maxHttpHeaderSize..."
+    
+    # Crea backup prima delle modifiche
     create_backup
     
+    # File temporaneo per le modifiche
     local temp_file=$(mktemp)
     
-    # Process each Connector element
+    # Modifica ogni connettore
     while IFS= read -r line; do
-        if [[ "$line" =~ \<Connector[^>]+protocol=\"HTTP/1\.1\" ]]; then
-            if echo "$line" | grep -q "maxHttpHeaderSize=\""; then
-                # Update existing maxHttpHeaderSize
-                line=$(echo "$line" | sed "s/maxHttpHeaderSize=\"[^\"]*\"/maxHttpHeaderSize=\"$RECOMMENDED_SIZE\"/")
+        if [[ $line =~ \<Connector ]]; then
+            if [[ $line =~ maxHttpHeaderSize=\"([0-9]+)\" ]]; then
+                # Sostituisci il valore esistente
+                line=$(echo "$line" | sed "s/maxHttpHeaderSize=\"[0-9]*\"/maxHttpHeaderSize=\"$MAX_HEADER_SIZE\"/")
             else
-                # Add maxHttpHeaderSize attribute
-                line=$(echo "$line" | sed "s/>/ maxHttpHeaderSize=\"$RECOMMENDED_SIZE\">/")
+                # Aggiungi il parametro se non presente
+                line=$(echo "$line" | sed "s/>/ maxHttpHeaderSize=\"$MAX_HEADER_SIZE\">/")
             fi
         fi
         echo "$line" >> "$temp_file"
     done < "$SERVER_XML"
     
-    # Apply changes
+    # Sostituisci il file originale
     mv "$temp_file" "$SERVER_XML"
+    
+    # Imposta permessi corretti
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    chmod 640 "$SERVER_XML"
+    chmod 600 "$SERVER_XML"
     
-    echo -e "${GREEN}[OK] MaxHttpHeaderSize settings updated${NC}"
+    echo -e "${GREEN}[OK] Configurazione maxHttpHeaderSize aggiornata${NC}"
+    
+    # Verifica le modifiche
+    echo -e "\nVerifica delle modifiche applicate:"
+    check_header_size
 }
 
-print_current_status() {
-    echo -e "\nCurrent HTTP Connector Configuration:"
-    grep -E "<Connector[^>]+protocol=\"HTTP/1\.1\"" "$SERVER_XML" | sed 's/^/  /'
-}
-
-verify_changes() {
-    echo -e "\nVerifying changes:"
-    local issues=0
-    
-    while IFS= read -r connector; do
-        local port=$(echo "$connector" | grep -oP 'port="\K[^"]+')
-        local max_size=$(echo "$connector" | grep -oP 'maxHttpHeaderSize="\K[^"]+' || echo "0")
-        
-        if [ "$max_size" != "$RECOMMENDED_SIZE" ]; then
-            echo -e "${YELLOW}[WARN] Port $port still has incorrect maxHttpHeaderSize: $max_size${NC}"
-            issues=1
-        else
-            echo -e "${GREEN}[OK] Port $port maxHttpHeaderSize configured correctly${NC}"
+verify_xml_syntax() {
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$SERVER_XML" 2>/dev/null; then
+            echo -e "${RED}[ERROR] Errore nella sintassi XML di server.xml${NC}"
+            return 1
         fi
-    done < <(grep -E "<Connector[^>]+protocol=\"HTTP/1\.1\"" "$SERVER_XML")
-    
-    return $issues
+    else
+        echo -e "${YELLOW}[WARN] xmllint non disponibile, impossibile verificare la sintassi XML${NC}"
+    fi
+    return 0
 }
 
 main() {
-    echo "CIS 10.10 Check - MaxHttpHeaderSize Configuration"
-    echo "----------------------------------------------"
+    echo "Controllo CIS 10.10 - Configure maxHttpHeaderSize"
+    echo "---------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_max_header_size
+    
+    check_header_size
     needs_fix=$?
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            fix_max_header_size
-            verify_changes
-            
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review maxHttpHeaderSize settings"
-            echo -e "2. Test application functionality"
-            echo -e "3. Monitor for any header size related issues"
-            echo -e "4. Restart Tomcat to apply changes"
-            echo -e "\n${YELLOW}[WARNING] MaxHttpHeaderSize set to $RECOMMENDED_SIZE bytes${NC}"
+            fix_header_size
+            if verify_xml_syntax; then
+                echo -e "\n${GREEN}Fix completato con successo.${NC}"
+                echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Monitorare i log per eventuali problemi con le richieste HTTP${NC}"
+            else
+                echo -e "\n${RED}[ERROR] Errore durante l'applicazione delle modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Ripristinare il backup e verificare manualmente la configurazione${NC}"
+            fi
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
