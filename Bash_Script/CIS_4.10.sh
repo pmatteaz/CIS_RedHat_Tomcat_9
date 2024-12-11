@@ -1,149 +1,268 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 4.10
+# Restrict access to Tomcat context.xml
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica dettagliata delle autorizzazioni per:
+#   File context.xml principale
+#   File context.xml delle applicazioni web
+#   Sintassi XML dei file context.xml
+#   Proprietà utente/gruppo
+#   Permessi specifici
+# 
+# Include una funzione di backup completa che:
+#   Crea un backup con timestamp
+#   Salva i permessi attuali
+#   Mantiene le ACL se disponibili
+#   Calcola l'hash SHA-256 dei file
+#   Fa una copia fisica dei file
+# 
+# Controlli specifici per:
+#   File context.xml: 600
+#   Proprietà: tomcat:tomcat
+#   Sintassi XML valida
+# 
+# Controlla tutti i context.xml, inclusi quelli in:
+#   /conf/context.xml
+#   webapps/ROOT/META-INF/context.xml
+#   webapps/manager/META-INF/context.xml
+#   webapps/host-manager/META-INF/context.xml
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
 
-# Colors for output
+# Array dei possibili context.xml in applicazioni web
+WEBAPP_CONTEXTS=(
+    "ROOT/META-INF/context.xml"
+    "manager/META-INF/context.xml"
+    "host-manager/META-INF/context.xml"
+)
+
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$CONTEXT_XML" ]; then
-        echo -e "${RED}[ERROR] context.xml not found: $CONTEXT_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_ownership() {
-    local result=0
-    local owner=$(stat -c '%U' "$CONTEXT_XML")
-    local group=$(stat -c '%G' "$CONTEXT_XML")
-    
-    if [ "$owner" != "$TOMCAT_USER" ]; then
-        echo -e "${YELLOW}[WARN] Invalid owner: $owner (should be $TOMCAT_USER)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] File owner${NC}"
+check_tomcat_user() {
+    if ! id "$TOMCAT_USER" &>/dev/null; then
+        echo -e "${RED}[ERROR] Utente Tomcat ($TOMCAT_USER) non trovato${NC}"
+        exit 1
     fi
     
-    if [ "$group" != "$TOMCAT_GROUP" ]; then
-        echo -e "${YELLOW}[WARN] Invalid group: $group (should be $TOMCAT_GROUP)${NC}"
+    if ! getent group "$TOMCAT_GROUP" &>/dev/null; then
+        echo -e "${RED}[ERROR] Gruppo Tomcat ($TOMCAT_GROUP) non trovato${NC}"
+        exit 1
+    fi
+}
+
+check_file_exists() {
+    if [ ! -f "$CONTEXT_XML" ]; then
+        echo -e "${RED}[ERROR] File context.xml principale non trovato: $CONTEXT_XML${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local file_path="$1"
+    local backup_dir="/tmp/tomcat_context_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/permissions_backup.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    # Crea directory di backup
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for context.xml files" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Tomcat User: $TOMCAT_USER" >> "$backup_file"
+    echo "# Tomcat Group: $TOMCAT_GROUP" >> "$backup_file"
+    echo >> "$backup_file"
+    
+    # Backup del context.xml principale
+    echo "### File: $CONTEXT_XML" >> "$backup_file"
+    ls -l "$CONTEXT_XML" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$CONTEXT_XML" > "${backup_dir}/context_xml_acl.txt"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$CONTEXT_XML" "${backup_dir}/"
+    
+    # Backup dei context.xml delle applicazioni web
+    for ctx in "${WEBAPP_CONTEXTS[@]}"; do
+        local webapp_context="$TOMCAT_HOME/webapps/$ctx"
+        if [ -f "$webapp_context" ]; then
+            echo "### File: $webapp_context" >> "$backup_file"
+            ls -l "$webapp_context" >> "$backup_file"
+            cp -p "$webapp_context" "${backup_dir}/$(basename $(dirname $ctx))_context.xml"
+        fi
+    done
+    
+    # Verifica hash dei file
+    if command -v sha256sum &> /dev/null; then
+        find "${backup_dir}" -type f -name "*.xml" -exec sha256sum {} \; > "${backup_dir}/context_files.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+    echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
+}
+
+check_xml_syntax() {
+    local file="$1"
+    local result=0
+    
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$file" 2>/dev/null; then
+            echo -e "${YELLOW}[WARN] File $file contiene errori di sintassi XML${NC}"
+            result=1
+        else
+            echo -e "${GREEN}[OK] Sintassi XML corretta per $file${NC}"
+        fi
+    else
+        echo -e "${YELLOW}[INFO] xmllint non disponibile, skip verifica sintassi XML${NC}"
+    fi
+    
+    return $result
+}
+
+check_file_permissions() {
+    local file="$1"
+    local result=0
+    
+    if [ ! -f "$file" ]; then
+        return 0
+    }
+    
+    echo -e "\nControllo permessi per $file"
+    
+    # Controlla proprietario e gruppo
+    local file_owner=$(stat -c '%U' "$file")
+    local file_group=$(stat -c '%G' "$file")
+    local file_perms=$(stat -c '%a' "$file")
+    
+    if [ "$file_owner" != "$TOMCAT_USER" ]; then
+        echo -e "${YELLOW}[WARN] Proprietario file non corretto: $file_owner (dovrebbe essere $TOMCAT_USER)${NC}"
         result=1
     else
-        echo -e "${GREEN}[OK] File group${NC}"
+        echo -e "${GREEN}[OK] Proprietario file corretto: $file_owner${NC}"
+    fi
+    
+    if [ "$file_group" != "$TOMCAT_GROUP" ]; then
+        echo -e "${YELLOW}[WARN] Gruppo file non corretto: $file_group (dovrebbe essere $TOMCAT_GROUP)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Gruppo file corretto: $file_group${NC}"
+    fi
+    
+    # Verifica permessi stretti (600)
+    if [ "$file_perms" != "600" ]; then
+        echo -e "${YELLOW}[WARN] Permessi file non corretti: $file_perms (dovrebbero essere 600)${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
     fi
     
     return $result
 }
 
 check_permissions() {
-    local result=0
-    local perms=$(stat -c '%a' "$CONTEXT_XML")
+    local total_result=0
     
-    if [ "$perms" != "640" ]; then
-        echo -e "${YELLOW}[WARN] Invalid permissions: $perms (should be 640)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] File permissions${NC}"
-    fi
+    # Controlla context.xml principale
+    check_file_permissions "$CONTEXT_XML"
+    total_result=$((total_result + $?))
     
-    return $result
-}
-
-check_context_contents() {
-    local result=0
+    check_xml_syntax "$CONTEXT_XML"
+    total_result=$((total_result + $?))
     
-    # Check for basic Context configuration
-    if ! grep -q "<Context>" "$CONTEXT_XML"; then
-        echo -e "${YELLOW}[WARN] Missing basic Context configuration${NC}"
-        result=1
-    fi
-    
-    # Check for security-related attributes
-    local security_checks=(
-        "allowLinking=\"false\""
-        "privileged=\"false\""
-        "crossContext=\"false\""
-    )
-    
-    for check in "${security_checks[@]}"; do
-        if ! grep -q "$check" "$CONTEXT_XML"; then
-            echo -e "${YELLOW}[WARN] Recommended security setting missing: $check${NC}"
-            result=1
+    # Controlla context.xml delle applicazioni web
+    for ctx in "${WEBAPP_CONTEXTS[@]}"; do
+        local webapp_context="$TOMCAT_HOME/webapps/$ctx"
+        if [ -f "$webapp_context" ]; then
+            check_file_permissions "$webapp_context"
+            total_result=$((total_result + $?))
+            
+            check_xml_syntax "$webapp_context"
+            total_result=$((total_result + $?))
         fi
     done
     
-    # Check for dangerous configurations
-    if grep -q "allowLinking=\"true\"" "$CONTEXT_XML"; then
-        echo -e "${YELLOW}[WARN] Dangerous setting found: allowLinking=\"true\"${NC}"
-        result=1
-    fi
-    
-    return $result
-}
-
-create_backup() {
-    local backup_file="${CONTEXT_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$CONTEXT_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_ownership() {
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CONTEXT_XML"
-    echo -e "${GREEN}[OK] Fixed ownership${NC}"
+    return $total_result
 }
 
 fix_permissions() {
-    chmod 640 "$CONTEXT_XML"
-    echo -e "${GREEN}[OK] Fixed permissions${NC}"
-}
-
-print_current_status() {
-    echo -e "\n${YELLOW}Current Status:${NC}"
-    echo -e "File: $CONTEXT_XML"
-    echo -e "Owner: $(stat -c '%U' "$CONTEXT_XML")"
-    echo -e "Group: $(stat -c '%G' "$CONTEXT_XML")"
-    echo -e "Permissions: $(stat -c '%a' "$CONTEXT_XML")"
+    echo "Applicazione correzioni permessi..."
+    
+    # Crea backup prima di applicare le modifiche
+    create_backup "$CONTEXT_XML"
+    
+    # Fix context.xml principale
+    if [ -f "$CONTEXT_XML" ]; then
+        chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CONTEXT_XML"
+        chmod 600 "$CONTEXT_XML"
+    fi
+    
+    # Fix context.xml delle applicazioni web
+    for ctx in "${WEBAPP_CONTEXTS[@]}"; do
+        local webapp_context="$TOMCAT_HOME/webapps/$ctx"
+        if [ -f "$webapp_context" ]; then
+            chown "$TOMCAT_USER:$TOMCAT_GROUP" "$webapp_context"
+            chmod 600 "$webapp_context"
+        fi
+    done
+    
+    echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
+    
+    # Verifica le modifiche
+    echo -e "\nVerifica delle modifiche applicate:"
+    check_permissions
 }
 
 main() {
-    echo "CIS 4.10 Check - context.xml Access"
-    echo "----------------------------------"
+    echo "Controllo CIS 4.10 - Restrict access to Tomcat context.xml"
+    echo "--------------------------------------------------------"
     
+    check_root
+    check_tomcat_user
     check_file_exists
     
     local needs_fix=0
-    check_ownership
-    needs_fix=$((needs_fix + $?))
     
     check_permissions
-    needs_fix=$((needs_fix + $?))
-    
-    check_context_contents
-    needs_fix=$((needs_fix + $?))
+    needs_fix=$?
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            create_backup
-            fix_ownership
             fix_permissions
-            echo -e "\n${GREEN}Fix completed. Restart Tomcat to apply changes.${NC}"
-            echo -e "${YELLOW}[WARNING] Please review context.xml contents manually for security configuration${NC}"
-            echo -e "${YELLOW}[INFO] Backup created at ${CONTEXT_XML}.*.bak${NC}"
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
