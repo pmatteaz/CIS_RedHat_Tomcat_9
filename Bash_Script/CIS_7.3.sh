@@ -1,191 +1,266 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 7.3
+# Ensure className is set correctly in context.xml
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica delle className in context.xml:
+#   Controllo delle classi consentite e sicure
+#   Verifica attributi obbligatori per ogni classe
+#   Controllo di classi potenzialmente non sicure
+# 
+# Controlli specifici per:
+#   JNDIRealm
+#   DataSourceRealm
+#   AccessLogValve
+#   Altri componenti sicuri di Tomcat
+# 
+# Sistema di correzione:
+#   Backup delle configurazioni
+#   Applicazione configurazioni sicure
+#   Verifica della sintassi XML
+#   Correzione di tutti i context.xml delle applicazioni
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
-WEBAPPS_DIR="$TOMCAT_HOME/conf/Catalina"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
+WEBAPPS_DIR="$TOMCAT_HOME/webapps"
 
-# Colors for output
+# Lista delle className accettate e sicure
+declare -A ALLOWED_CLASSNAMES=(
+    ["org.apache.catalina.realm.JNDIRealm"]="Realm"
+    ["org.apache.catalina.realm.UserDatabaseRealm"]="Realm"
+    ["org.apache.catalina.realm.DataSourceRealm"]="Realm"
+    ["org.apache.catalina.valves.AccessLogValve"]="Valve"
+    ["org.apache.catalina.valves.RemoteAddrValve"]="Valve"
+    ["org.apache.catalina.valves.RemoteHostValve"]="Valve"
+    ["org.apache.catalina.authenticator.BasicAuthenticator"]="Authenticator"
+    ["org.apache.catalina.authenticator.DigestAuthenticator"]="Authenticator"
+)
+
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Valid classNames
-declare -a VALID_CLASSNAMES=(
-    "org.apache.catalina.valves.AccessLogValve"
-    "org.apache.catalina.valves.RemoteAddrValve"
-    "org.apache.catalina.valves.RemoteHostValve"
-    "org.apache.catalina.authenticator.BasicAuthenticator"
-    "org.apache.catalina.authenticator.DigestAuthenticator"
-)
-
-check_file_exists() {
-    if [ ! -f "$CONTEXT_XML" ]; then
-        echo -e "${RED}[ERROR] context.xml not found: $CONTEXT_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_classnames() {
-    local result=0
-    
-    echo -e "\nChecking className attributes in context.xml files:"
-    
-    # Check main context.xml
-    echo -e "\nChecking main context.xml:"
-    check_single_file "$CONTEXT_XML"
-    result=$((result + $?))
-    
-    # Check application-specific context.xml files
-    if [ -d "$WEBAPPS_DIR" ]; then
-        for app_dir in "$WEBAPPS_DIR"/*; do
-            if [ -d "$app_dir" ]; then
-                local app_context="$app_dir/context.xml.default"
-                if [ -f "$app_context" ]; then
-                    echo -e "\nChecking $(basename "$app_dir") context.xml:"
-                    check_single_file "$app_context"
-                    result=$((result + $?))
-                fi
-            fi
-        done
+check_file_exists() {
+    if [ ! -f "$CONTEXT_XML" ]; then
+        echo -e "${RED}[ERROR] File context.xml non trovato: $CONTEXT_XML${NC}"
+        exit 1
     fi
-    
-    return $result
 }
 
-check_single_file() {
-    local file=$1
+create_backup() {
+    local file="$1"
+    local backup_dir="/tmp/tomcat_context_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for $file" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Original file: $file" >> "$backup_file"
+    ls -l "$file" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$file" > "${backup_dir}/$(basename "$file").acl"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$file" "$backup_dir/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$file" > "${backup_dir}/$(basename "$file").sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+}
+
+check_classnames() {
+    local file="$1"
     local result=0
     
+    echo "Controllo className in $file..."
+    
+    # Estrai tutte le definizioni di className
     while IFS= read -r line; do
-        if [[ "$line" =~ className=\"([^\"]*)\" ]]; then
-            local classname="${BASH_REMATCH[1]}"
-            local valid=0
+        if [[ $line =~ className=\"([^\"]+)\" ]]; then
+            local class="${BASH_REMATCH[1]}"
+            local found=0
             
-            for valid_class in "${VALID_CLASSNAMES[@]}"; do
-                if [ "$classname" == "$valid_class" ]; then
-                    valid=1
+            echo -e "\nAnalisi className: $class"
+            
+            # Verifica se la classe è nella lista consentita
+            for allowed_class in "${!ALLOWED_CLASSNAMES[@]}"; do
+                if [ "$class" == "$allowed_class" ]; then
+                    found=1
+                    echo -e "${GREEN}[OK] className valido: $class (${ALLOWED_CLASSNAMES[$allowed_class]})${NC}"
                     break
                 fi
             done
             
-            if [ $valid -eq 0 ]; then
-                echo -e "${YELLOW}[WARN] Invalid className found: $classname in $file${NC}"
+            if [ $found -eq 0 ]; then
+                echo -e "${YELLOW}[WARN] className non riconosciuto o potenzialmente non sicuro: $class${NC}"
                 result=1
-            else
-                echo -e "${GREEN}[OK] Valid className: $classname${NC}"
             fi
+            
+            # Controlli aggiuntivi di sicurezza per classi specifiche
+            case "$class" in
+                *"JNDIRealm")
+                    if ! grep -q "userPassword" <<< "$line"; then
+                        echo -e "${YELLOW}[WARN] JNDIRealm dovrebbe specificare l'attributo userPassword${NC}"
+                        result=1
+                    fi
+                    ;;
+                *"DataSourceRealm")
+                    if ! grep -q "dataSourceName" <<< "$line"; then
+                        echo -e "${YELLOW}[WARN] DataSourceRealm dovrebbe specificare l'attributo dataSourceName${NC}"
+                        result=1
+                    fi
+                    ;;
+                *"AccessLogValve")
+                    if ! grep -q "pattern=" <<< "$line"; then
+                        echo -e "${YELLOW}[WARN] AccessLogValve dovrebbe specificare un pattern di logging${NC}"
+                        result=1
+                    fi
+                    ;;
+            esac
         fi
     done < "$file"
     
     return $result
 }
 
-create_backup() {
-    local file=$1
-    local backup_file="${file}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$file" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
 fix_classnames() {
-    # Fix main context.xml
-    fix_single_file "$CONTEXT_XML"
-    
-    # Fix application-specific context.xml files
-    if [ -d "$WEBAPPS_DIR" ]; then
-        for app_dir in "$WEBAPPS_DIR"/*; do
-            if [ -d "$app_dir" ]; then
-                local app_context="$app_dir/context.xml.default"
-                if [ -f "$app_context" ]; then
-                    fix_single_file "$app_context"
-                fi
-            fi
-        done
-    fi
-}
-
-fix_single_file() {
-    local file=$1
+    local file="$1"
     local temp_file=$(mktemp)
     
-    create_backup "$file"
+    echo "Correzione className in $file..."
     
+    # Mantieni la struttura base del file
     while IFS= read -r line; do
-        if [[ "$line" =~ className=\"([^\"]*)\" ]]; then
-            local classname="${BASH_REMATCH[1]}"
-            local valid=0
+        if [[ $line =~ className=\"([^\"]+)\" ]]; then
+            local class="${BASH_REMATCH[1]}"
+            local found=0
             
-            for valid_class in "${VALID_CLASSNAMES[@]}"; do
-                if [ "$classname" == "$valid_class" ]; then
-                    valid=1
+            # Cerca la classe nella lista consentita e applica la configurazione corretta
+            for allowed_class in "${!ALLOWED_CLASSNAMES[@]}"; do
+                if [[ "$class" == *"$allowed_class"* ]]; then
+                    case "$allowed_class" in
+                        *"JNDIRealm")
+                            line=$(echo "$line" | sed 's/>/userPassword="userPassword" \/>/')
+                            ;;
+                        *"DataSourceRealm")
+                            line=$(echo "$line" | sed 's/>/dataSourceName="jdbc\/UserDB" \/>/')
+                            ;;
+                        *"AccessLogValve")
+                            line=$(echo "$line" | sed 's/>/pattern="%h %l %u %t &quot;%r&quot; %s %b" \/>/')
+                            ;;
+                    esac
+                    found=1
                     break
                 fi
             done
             
-            if [ $valid -eq 0 ]; then
-                # Replace invalid className with a default valid one
-                line="${line/className=\"$classname\"/className=\"org.apache.catalina.valves.AccessLogValve\"}"
-                echo -e "${YELLOW}[INFO] Replaced invalid className: $classname${NC}"
+            if [ $found -eq 0 ]; then
+                # Sostituisci con una configurazione sicura di default
+                line='<Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase" />'
+                echo -e "${YELLOW}[INFO] Sostituita className non sicura con configurazione di default${NC}"
             fi
         fi
         echo "$line" >> "$temp_file"
     done < "$file"
     
+    # Sostituisci il file originale
     mv "$temp_file" "$file"
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$file"
-    chmod 640 "$file"
+    chmod 600 "$file"
     
-    echo -e "${GREEN}[OK] Updated className attributes in $file${NC}"
+    echo -e "${GREEN}[OK] Configurazioni className corrette applicate${NC}"
 }
 
-print_current_status() {
-    echo -e "\nCurrent className Configuration:"
-    echo -e "\nMain context.xml:"
-    grep -i "className" "$CONTEXT_XML" | sed 's/^/  /'
+verify_xml_syntax() {
+    local file="$1"
     
-    if [ -d "$WEBAPPS_DIR" ]; then
-        for app_dir in "$WEBAPPS_DIR"/*; do
-            if [ -d "$app_dir" ]; then
-                local app_context="$app_dir/context.xml.default"
-                if [ -f "$app_context" ]; then
-                    echo -e "\n$(basename "$app_dir") context.xml:"
-                    grep -i "className" "$app_context" | sed 's/^/  /'
-                fi
-            fi
-        done
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$file" 2>/dev/null; then
+            echo -e "${RED}[ERROR] Errore di sintassi XML in $file${NC}"
+            return 1
+        fi
+        echo -e "${GREEN}[OK] Sintassi XML corretta in $file${NC}"
+    else
+        echo -e "${YELLOW}[WARN] xmllint non disponibile, skip verifica sintassi XML${NC}"
     fi
+    
+    return 0
 }
 
 main() {
-    echo "CIS 7.3 Check - className Configuration"
-    echo "------------------------------------"
+    echo "Controllo CIS 7.3 - Ensure className is set correctly in context.xml"
+    echo "---------------------------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_classnames
+    
+    # Controlla context.xml principale
+    check_classnames "$CONTEXT_XML"
     needs_fix=$?
     
+    # Controlla context.xml delle applicazioni web
+    find "$WEBAPPS_DIR" -name "context.xml" -type f | while read -r ctx_file; do
+        check_classnames "$ctx_file"
+        needs_fix=$((needs_fix + $?))
+    done
+    
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            fix_classnames
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review replaced className attributes"
-            echo -e "2. Verify application functionality"
-            echo -e "3. Restart Tomcat to apply changes"
+            # Fix context.xml principale
+            create_backup "$CONTEXT_XML"
+            fix_classnames "$CONTEXT_XML"
+            
+            # Fix context.xml delle applicazioni web
+            find "$WEBAPPS_DIR" -name "context.xml" -type f | while read -r ctx_file; do
+                create_backup "$ctx_file"
+                fix_classnames "$ctx_file"
+            done
+            
+            if verify_xml_syntax "$CONTEXT_XML"; then
+                echo -e "\n${GREEN}Fix completato.${NC}"
+                echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Verificare il funzionamento delle applicazioni${NC}"
+            else
+                echo -e "\n${RED}[ERROR] Errore durante l'applicazione delle modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Ripristinare il backup e verificare manualmente la configurazione${NC}"
+            fi
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
