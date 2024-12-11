@@ -6,16 +6,15 @@
 # Lo script implementa le seguenti funzionalità:
 #
 # Verifica la configurazione dell'header Server in:
-#
-# server.xml (per tutti i connettori)
-# catalina.properties (server.info property)
+#   server.xml (per tutti i connettori)
+#   catalina.properties (server.info property)
 #
 # Controlla i permessi dei file di configurazione
 # Se necessario, offre l'opzione di fix automatico che:
-# Modifica l'attributo server per tutti i connettori in server.xml
-# Aggiorna/aggiunge la proprietà server.info in catalina.properties
-# Corregge i permessi dei file (600)
-# Crea backup dei file prima delle modifiche
+#   Modifica l'attributo server per tutti i connettori in server.xml
+#   Aggiorna/aggiunge la proprietà server.info in catalina.properties
+#   Corregge i permessi dei file (600)
+#   Crea backup dei file prima delle modifiche
 
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
