@@ -1,134 +1,233 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 6.4
+# Ensure secure is set to true only for SSL-enabled Connectors
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica dei connettori in server.xml:
+#   Controllo attributo secure per connettori SSL
+#   Verifica della corretta configurazione SSL
+#   Controllo di attributi correlati alla sicurezza
+# 
+# Controlli specifici per:
+#   SSLEnabled="true" richiede secure="true"
+#   Rimozione di secure="true" per connettori non SSL
+#   Protocolli e configurazioni SSL correlate
+# 
+# Sistema di correzione:
+#   Backup delle configurazioni
+#   Modifica attributi dei connettori
+#   Verifica della sintassi XML
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$SERVER_XML" ]; then
-        echo -e "${RED}[ERROR] server.xml not found: $SERVER_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_secure_attribute() {
+check_file_exists() {
+    if [ ! -f "$SERVER_XML" ]; then
+        echo -e "${RED}[ERROR] File server.xml non trovato: $SERVER_XML${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_secure_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for server.xml" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Original file: $SERVER_XML" >> "$backup_file"
+    ls -l "$SERVER_XML" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$SERVER_XML" > "${backup_dir}/server_xml.acl"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$SERVER_XML" "$backup_dir/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+}
+
+check_connectors() {
     local result=0
     
-    echo -e "\nChecking Connector secure attributes:"
-    while IFS= read -r connector; do
-        local port=$(echo "$connector" | grep -oP 'port="\K[^"]+')
-        local ssl_enabled=$(echo "$connector" | grep -oP 'SSLEnabled="\K[^"]+' || echo "false")
-        local secure=$(echo "$connector" | grep -oP 'secure="\K[^"]+' || echo "false")
-        local protocol=$(echo "$connector" | grep -oP 'protocol="\K[^"]+' || echo "HTTP/1.1")
-        
-        echo -e "\nAnalyzing connector on port $port (Protocol: $protocol):"
-        
-        if [ "$ssl_enabled" == "true" ] && [ "$secure" != "true" ]; then
-            echo -e "${YELLOW}[WARN] SSL enabled but secure attribute is false on port $port${NC}"
-            result=1
-        elif [ "$ssl_enabled" != "true" ] && [ "$secure" == "true" ]; then
-            echo -e "${YELLOW}[WARN] SSL disabled but secure attribute is true on port $port${NC}"
-            result=1
-        elif [ "$ssl_enabled" == "true" ] && [ "$secure" == "true" ]; then
-            echo -e "${GREEN}[OK] SSL enabled and secure attribute is true on port $port${NC}"
-        else
-            echo -e "${GREEN}[OK] SSL disabled and secure attribute is false on port $port${NC}"
+    echo "Controllo configurazione connettori..."
+    
+    # Estrai e analizza ogni connettore
+    while IFS= read -r line; do
+        if [[ $line =~ \<Connector ]]; then
+            echo -e "\nAnalisi connettore:"
+            echo "$line"
+            
+            local has_ssl=0
+            local has_secure=0
+            local secure_value=""
+            
+            # Controlla se il connettore ha SSL abilitato
+            if [[ $line =~ SSLEnabled=\"true\" ]]; then
+                has_ssl=1
+            fi
+            
+            # Controlla se l'attributo secure è presente e il suo valore
+            if [[ $line =~ secure=\"([^\"]+)\" ]]; then
+                has_secure=1
+                secure_value="${BASH_REMATCH[1]}"
+            fi
+            
+            # Verifica la corretta configurazione
+            if [ $has_ssl -eq 1 ]; then
+                if [ $has_secure -eq 0 ]; then
+                    echo -e "${YELLOW}[WARN] Connettore SSL senza attributo secure${NC}"
+                    result=1
+                elif [ "$secure_value" != "true" ]; then
+                    echo -e "${YELLOW}[WARN] Connettore SSL con secure=\"$secure_value\" (dovrebbe essere true)${NC}"
+                    result=1
+                else
+                    echo -e "${GREEN}[OK] Connettore SSL configurato correttamente${NC}"
+                fi
+            else
+                if [ $has_secure -eq 1 ] && [ "$secure_value" = "true" ]; then
+                    echo -e "${YELLOW}[WARN] Connettore non-SSL con secure=\"true\"${NC}"
+                    result=1
+                else
+                    echo -e "${GREEN}[OK] Connettore non-SSL configurato correttamente${NC}"
+                fi
+            fi
+            
+            # Verifica altre configurazioni di sicurezza correlate
+            if [ $has_ssl -eq 1 ]; then
+                if ! [[ $line =~ protocol=\"HTTP/1\.1\" ]]; then
+                    echo -e "${YELLOW}[WARN] Protocollo non specificato per connettore SSL${NC}"
+                    result=1
+                fi
+                
+                if ! [[ $line =~ sslProtocol=\"TLS\" ]]; then
+                    echo -e "${YELLOW}[WARN] sslProtocol non specificato o non impostato a TLS${NC}"
+                    result=1
+                fi
+            fi
         fi
-        
-        # Additional check for missing secure attribute
-        if ! echo "$connector" | grep -q 'secure="'; then
-            echo -e "${YELLOW}[WARN] secure attribute not explicitly set on port $port${NC}"
-            result=1
-        fi
-    done < <(grep -E "<Connector[^>]+(HTTP\/1.1|AJP\/1.3)" "$SERVER_XML")
+    done < "$SERVER_XML"
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${SERVER_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$SERVER_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_secure_attribute() {
-    local temp_file=$(mktemp)
-    cp "$SERVER_XML" "$temp_file"
+fix_connectors() {
+    echo "Correzione configurazione connettori..."
     
-    while IFS= read -r connector; do
-        local port=$(echo "$connector" | grep -oP 'port="\K[^"]+')
-        local ssl_enabled=$(echo "$connector" | grep -oP 'SSLEnabled="\K[^"]+' || echo "false")
-        local new_connector="$connector"
-        
-        if [ "$ssl_enabled" == "true" ]; then
-            # Set secure="true" for SSL-enabled connectors
-            if echo "$connector" | grep -q 'secure="'; then
-                new_connector=$(echo "$connector" | sed 's/secure="[^"]*"/secure="true"/')
+    # File temporaneo per le modifiche
+    local temp_file=$(mktemp)
+    
+    # Processa il file riga per riga
+    while IFS= read -r line; do
+        if [[ $line =~ \<Connector ]]; then
+            if [[ $line =~ SSLEnabled=\"true\" ]]; then
+                # Connettore SSL: imposta secure="true"
+                if [[ $line =~ secure=\"[^\"]+\" ]]; then
+                    line=$(echo "$line" | sed 's/secure="[^"]*"/secure="true"/')
+                else
+                    line=$(echo "$line" | sed 's/>/ secure="true">/')
+                fi
+                
+                # Assicurati che le altre configurazioni SSL siano presenti
+                if ! [[ $line =~ protocol=\"HTTP/1\.1\" ]]; then
+                    line=$(echo "$line" | sed 's/>/ protocol="HTTP\/1.1">/')
+                fi
+                if ! [[ $line =~ sslProtocol=\"TLS\" ]]; then
+                    line=$(echo "$line" | sed 's/>/ sslProtocol="TLS">/')
+                fi
             else
-                new_connector=$(echo "$connector" | sed 's/>/ secure="true">/')
-            fi
-        else
-            # Set secure="false" for non-SSL connectors
-            if echo "$connector" | grep -q 'secure="'; then
-                new_connector=$(echo "$connector" | sed 's/secure="[^"]*"/secure="false"/')
-            else
-                new_connector=$(echo "$connector" | sed 's/>/ secure="false">/')
+                # Connettore non-SSL: rimuovi secure="true" se presente
+                line=$(echo "$line" | sed 's/ secure="true"//')
             fi
         fi
-        
-        # Replace old connector with new one
-        escaped_connector=$(echo "$connector" | sed 's/[\/&]/\\&/g')
-        escaped_new_connector=$(echo "$new_connector" | sed 's/[\/&]/\\&/g')
-        sed -i "s|$escaped_connector|$escaped_new_connector|" "$temp_file"
-        
-    done < <(grep -E "<Connector[^>]+(HTTP\/1.1|AJP\/1.3)" "$SERVER_XML")
+        echo "$line" >> "$temp_file"
+    done < "$SERVER_XML"
     
-    # Apply changes
+    # Sostituisci il file originale
     mv "$temp_file" "$SERVER_XML"
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    chmod 640 "$SERVER_XML"
+    chmod 600 "$SERVER_XML"
     
-    echo -e "${GREEN}[OK] Secure attributes updated${NC}"
+    echo -e "${GREEN}[OK] Configurazione connettori corretta${NC}"
 }
 
-print_current_status() {
-    echo -e "\nCurrent Connector Configuration:"
-    grep -E "<Connector[^>]+(HTTP\/1.1|AJP\/1.3)" "$SERVER_XML" | sed 's/^/  /'
+verify_xml_syntax() {
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$SERVER_XML" 2>/dev/null; then
+            echo -e "${RED}[ERROR] Errore di sintassi XML in server.xml${NC}"
+            return 1
+        fi
+        echo -e "${GREEN}[OK] Sintassi XML corretta${NC}"
+    else
+        echo -e "${YELLOW}[WARN] xmllint non disponibile, skip verifica sintassi XML${NC}"
+    fi
+    return 0
 }
 
 main() {
-    echo "CIS 6.4 Check - Secure Attribute Configuration"
-    echo "--------------------------------------------"
+    echo "Controllo CIS 6.4 - Ensure secure is set to true only for SSL-enabled Connectors"
+    echo "----------------------------------------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_secure_attribute
+    
+    check_connectors
     needs_fix=$?
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
             create_backup
-            fix_secure_attribute
-            echo -e "\n${GREEN}Fix completed. Please restart Tomcat to apply changes.${NC}"
-            echo -e "${YELLOW}[WARNING] Verify SSL configuration for secure connectors${NC}"
+            fix_connectors
+            if verify_xml_syntax; then
+                echo -e "\n${GREEN}Fix completato.${NC}"
+                echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Verificare il funzionamento delle connessioni SSL${NC}"
+            else
+                echo -e "\n${RED}[ERROR] Errore durante l'applicazione delle modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Ripristinare il backup e verificare manualmente la configurazione${NC}"
+            fi
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
