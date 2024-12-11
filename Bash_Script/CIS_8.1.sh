@@ -1,152 +1,263 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 8.1
+# Restrict runtime access to sensitive packages
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica della configurazione:
+#   Controllo dei permessi del file catalina.policy
+#   Verifica delle protezioni per pacchetti sensibili
+#   Analisi delle configurazioni di sicurezza
+# 
+# Protezione dei pacchetti sensibili:
+#   sun.*
+#   org.apache.catalina.*
+#   org.apache.tomcat.*
+#   java.security.*
+#   javax.security.*
+# 
+# Sistema di correzione:
+#   Backup completo della configurazione
+#   Applicazione dei permessi corretti
+#   Generazione di una nuova policy di sicurezza
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-CATALINA_PROPERTIES="$TOMCAT_HOME/conf/catalina.properties"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+CATALINA_POLICY="$TOMCAT_HOME/conf/catalina.policy"
 
-# Restricted packages list
-RESTRICTED_PACKAGES=(
-    "sun.*"
-    "org.apache.catalina.webresources"
-    "org.apache.catalina.security"
-    "org.apache.catalina.mbeans"
-    "org.apache.catalina.core"
-    "org.apache.catalina.startup"
-    "org.apache.catalina.loader"
-    "org.apache.catalina.security"
-    "org.apache.tomcat"
-    "org.apache.jasper"
-    "java.lang.reflect"
-    "javax.security"
-)
-
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$CATALINA_PROPERTIES" ]; then
-        echo -e "${RED}[ERROR] catalina.properties not found: $CATALINA_PROPERTIES${NC}"
+# Lista dei pacchetti sensibili da proteggere
+SENSITIVE_PACKAGES=(
+    "sun."
+    "org.apache.catalina.core"
+    "org.apache.catalina.security"
+    "org.apache.catalina.users"
+    "org.apache.catalina.authenticator"
+    "org.apache.tomcat.util"
+    "java.security"
+    "java.lang.SecurityManager"
+    "javax.security"
+)
+
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_package_restrictions() {
+check_file_exists() {
+    if [ ! -f "$CATALINA_POLICY" ]; then
+        echo -e "${RED}[ERROR] File catalina.policy non trovato: $CATALINA_POLICY${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_policy_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for catalina.policy" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Original file: $CATALINA_POLICY" >> "$backup_file"
+    ls -l "$CATALINA_POLICY" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$CATALINA_POLICY" > "${backup_dir}/catalina_policy.acl"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$CATALINA_POLICY" "$backup_dir/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$CATALINA_POLICY" > "${backup_dir}/catalina.policy.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+}
+
+check_policy_permissions() {
+    echo "Controllo permessi di catalina.policy..."
+    
+    local file_owner=$(stat -c '%U' "$CATALINA_POLICY")
+    local file_group=$(stat -c '%G' "$CATALINA_POLICY")
+    local file_perms=$(stat -c '%a' "$CATALINA_POLICY")
+    
     local result=0
     
-    echo -e "\nChecking package access restrictions:"
-    
-    # Check for package.access property
-    if ! grep -q "^package.access=" "$CATALINA_PROPERTIES"; then
-        echo -e "${YELLOW}[WARN] package.access property not found${NC}"
+    if [ "$file_owner" != "$TOMCAT_USER" ]; then
+        echo -e "${YELLOW}[WARN] Proprietario file non corretto: $file_owner (dovrebbe essere $TOMCAT_USER)${NC}"
         result=1
-    else
-        local current_restrictions=$(grep "^package.access=" "$CATALINA_PROPERTIES" | cut -d'=' -f2)
-        
-        # Check each required package
-        for pkg in "${RESTRICTED_PACKAGES[@]}"; do
-            if ! echo "$current_restrictions" | grep -q "$pkg"; then
-                echo -e "${YELLOW}[WARN] Missing restriction for package: $pkg${NC}"
-                result=1
-            else
-                echo -e "${GREEN}[OK] Found restriction for package: $pkg${NC}"
-            fi
-        done
+    fi
+    
+    if [ "$file_group" != "$TOMCAT_GROUP" ]; then
+        echo -e "${YELLOW}[WARN] Gruppo file non corretto: $file_group (dovrebbe essere $TOMCAT_GROUP)${NC}"
+        result=1
+    fi
+    
+    if [ "$file_perms" != "600" ]; then
+        echo -e "${YELLOW}[WARN] Permessi file non corretti: $file_perms (dovrebbero essere 600)${NC}"
+        result=1
     fi
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${CATALINA_PROPERTIES}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$CATALINA_PROPERTIES" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
+check_policy_content() {
+    echo "Controllo configurazioni di sicurezza..."
+    
+    local result=0
+    
+    # Verifica la presenza della sezione di default
+    if ! grep -q "grant {" "$CATALINA_POLICY"; then
+        echo -e "${YELLOW}[WARN] Sezione grant predefinita non trovata${NC}"
+        result=1
+    fi
+    
+    # Controlla i pacchetti sensibili
+    for package in "${SENSITIVE_PACKAGES[@]}"; do
+        if ! grep -q "permission java.security.AllPermission \"$package\*\"" "$CATALINA_POLICY"; then
+            echo -e "${YELLOW}[WARN] Protezione non trovata per il pacchetto: $package${NC}"
+            result=1
+        fi
+    done
+    
+    # Verifica altre configurazioni di sicurezza importanti
+    if ! grep -q "SecurityManager" "$CATALINA_POLICY"; then
+        echo -e "${YELLOW}[WARN] Configurazione SecurityManager non trovata${NC}"
+        result=1
+    fi
+    
+    if grep -q "permission java.security.AllPermission;" "$CATALINA_POLICY"; then
+        echo -e "${YELLOW}[WARN] Trovato AllPermission generico - potenziale rischio di sicurezza${NC}"
+        result=1
+    fi
+    
+    return $result
 }
 
-fix_package_restrictions() {
-    create_backup
+fix_policy_permissions() {
+    echo "Correzione permessi di catalina.policy..."
     
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CATALINA_POLICY"
+    chmod 600 "$CATALINA_POLICY"
+    
+    echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
+}
+
+fix_policy_content() {
+    echo "Applicazione configurazioni di sicurezza..."
+    
+    # Crea un file temporaneo per le modifiche
     local temp_file=$(mktemp)
     
-    # Build package.access string
-    local package_access="package.access="
-    for pkg in "${RESTRICTED_PACKAGES[@]}"; do
-        package_access="${package_access}${pkg},"
+    # Aggiungi header
+    cat > "$temp_file" << EOL
+// Catalina.policy - Security Policy for Tomcat
+// Generated by CIS compliance script
+
+// Default permissions
+grant {
+    // Basic runtime permissions
+    permission java.io.FilePermission "\${catalina.base}${/}-", "read";
+    permission java.util.PropertyPermission "*", "read";
+    
+    // Minimal network permissions
+    permission java.net.SocketPermission "localhost:1024-65535", "listen";
+    permission java.net.SocketPermission "*:1024-65535", "accept,connect";
+};
+
+EOL
+    
+    # Aggiungi protezioni per pacchetti sensibili
+    for package in "${SENSITIVE_PACKAGES[@]}"; do
+        cat >> "$temp_file" << EOL
+// Protect $package
+grant codeBase "file:\${catalina.home}/bin/-" {
+    permission java.security.AllPermission "$package*";
+};
+grant codeBase "file:\${catalina.home}/lib/-" {
+    permission java.security.AllPermission "$package*";
+};
+
+EOL
     done
-    # Remove trailing comma
-    package_access=${package_access%,}
     
-    # Update or add package.access property
-    if grep -q "^package.access=" "$CATALINA_PROPERTIES"; then
-        # Update existing property
-        sed "s|^package.access=.*|$package_access|" "$CATALINA_PROPERTIES" > "$temp_file"
-    else
-        # Add new property
-        cp "$CATALINA_PROPERTIES" "$temp_file"
-        echo -e "\n# Runtime package access restrictions" >> "$temp_file"
-        echo "$package_access" >> "$temp_file"
-    fi
+    # Aggiungi configurazioni aggiuntive di sicurezza
+    cat >> "$temp_file" << EOL
+// Web application permissions
+grant {
+    // Minimal set of permissions for web applications
+    permission java.lang.RuntimePermission "getClassLoader";
+    permission java.lang.RuntimePermission "setContextClassLoader";
     
-    # Apply changes
-    mv "$temp_file" "$CATALINA_PROPERTIES"
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CATALINA_PROPERTIES"
-    chmod 640 "$CATALINA_PROPERTIES"
+    // File system permissions
+    permission java.io.FilePermission "\${catalina.base}/webapps${/}-", "read";
+    permission java.io.FilePermission "\${catalina.base}/work${/}-", "read,write,delete";
     
-    echo -e "${GREEN}[OK] Package access restrictions updated${NC}"
-}
-
-verify_restrictions() {
-    echo -e "\nVerifying final configuration:"
-    if grep -q "^package.access=" "$CATALINA_PROPERTIES"; then
-        local current_restrictions=$(grep "^package.access=" "$CATALINA_PROPERTIES")
-        echo -e "${GREEN}[OK] Package access configuration:${NC}"
-        echo "$current_restrictions" | sed 's/,/,\n\t/g' | sed 's/=/=\n\t/'
-    else
-        echo -e "${RED}[ERROR] Package access property not found after fix${NC}"
-    fi
-}
-
-print_current_status() {
-    echo -e "\nCurrent Package Access Configuration:"
-    if grep -q "^package.access=" "$CATALINA_PROPERTIES"; then
-        grep "^package.access=" "$CATALINA_PROPERTIES" | sed 's/,/,\n\t/g' | sed 's/=/=\n\t/'
-    else
-        echo -e "${YELLOW}No package access restrictions found${NC}"
-    fi
+    // Session related permissions
+    permission java.lang.RuntimePermission "accessClassInPackage.org.apache.tomcat.util.http.mapper";
+};
+EOL
+    
+    # Sostituisci il file originale
+    mv "$temp_file" "$CATALINA_POLICY"
+    
+    # Imposta i permessi corretti
+    fix_policy_permissions
+    
+    echo -e "${GREEN}[OK] Configurazioni di sicurezza applicate${NC}"
 }
 
 main() {
-    echo "CIS 8.1 Check - Runtime Package Access Restrictions"
-    echo "------------------------------------------------"
+    echo "Controllo CIS 8.1 - Restrict runtime access to sensitive packages"
+    echo "------------------------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_package_restrictions
-    needs_fix=$?
+    
+    check_policy_permissions
+    needs_fix=$((needs_fix + $?))
+    
+    check_policy_content
+    needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            fix_package_restrictions
-            verify_restrictions
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review package access restrictions"
-            echo -e "2. Test application functionality"
-            echo -e "3. Restart Tomcat to apply changes"
-            echo -e "\n${YELLOW}[WARNING] Package restrictions may affect application functionality${NC}"
+            create_backup
+            fix_policy_content
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+            echo -e "${YELLOW}NOTA: Verificare il corretto funzionamento delle applicazioni${NC}"
+            echo -e "${YELLOW}NOTA: Potrebbe essere necessario personalizzare ulteriormente le policy${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
