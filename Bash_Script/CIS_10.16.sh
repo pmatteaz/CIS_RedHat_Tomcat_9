@@ -1,143 +1,227 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 10.16
+# Enable Memory Leak Listener
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica della configurazione:
+#   Controllo presenza del Memory Leak Listener
+#   Verifica posizione ottimale nel server.xml
+#   Controllo impostazioni JVM correlate
+# 
+# Funzionalità di correzione:
+#   Configurazione del Memory Leak Listener
+#   Impostazione logging GC
+#   Configurazione JVM ottimale
+# 
+# Sistema di backup:
+#   Backup di server.xml prima delle modifiche
+#   Backup con timestamp
+#   Verifica dell'integrità tramite hash
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
-# Colors for output
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Memory Leak Listener class
-LISTENER_CLASS="org.apache.catalina.core.JreMemoryLeakPreventionListener"
+# Configurazione del Memory Leak Listener
+MEMORY_LEAK_LISTENER='<Listener className="org.apache.catalina.core.JreMemoryLeakPreventionListener" />'
 
-check_file_exists() {
-    if [ ! -f "$SERVER_XML" ]; then
-        echo -e "${RED}[ERROR] server.xml not found: $SERVER_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_memory_leak_listener() {
+check_tomcat_user() {
+    if ! id "$TOMCAT_USER" &>/dev/null; then
+        echo -e "${RED}[ERROR] Utente Tomcat ($TOMCAT_USER) non trovato${NC}"
+        exit 1
+    fi
+    
+    if ! getent group "$TOMCAT_GROUP" &>/dev/null; then
+        echo -e "${RED}[ERROR] Gruppo Tomcat ($TOMCAT_GROUP) non trovato${NC}"
+        exit 1
+    fi
+}
+
+check_file_exists() {
+    if [ ! -f "$SERVER_XML" ]; then
+        echo -e "${RED}[ERROR] File server.xml non trovato: $SERVER_XML${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_memory_leak_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/permissions_backup.txt"
+    
+    echo "Creazione backup della configurazione..."
+    
+    # Crea directory di backup
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for server.xml" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Tomcat User: $TOMCAT_USER" >> "$backup_file"
+    echo "# Tomcat Group: $TOMCAT_GROUP" >> "$backup_file"
+    echo >> "$backup_file"
+    
+    # Backup dei permessi attuali
+    ls -l "$SERVER_XML" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$SERVER_XML" > "${backup_dir}/server_xml_acl.txt"
+    fi
+    
+    # Copia fisica del file
+    cp -p "$SERVER_XML" "${backup_dir}/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+    echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
+}
+
+check_memory_leak_configuration() {
     local result=0
     
-    echo -e "\nChecking Memory Leak Listener configuration:"
+    echo "Controllo configurazione Memory Leak Listener..."
     
-    # Check if listener is present
-    if ! grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        echo -e "${YELLOW}[WARN] Memory Leak Listener not configured${NC}"
+    # Verifica presenza del Memory Leak Listener
+    if ! grep -q "org.apache.catalina.core.JreMemoryLeakPreventionListener" "$SERVER_XML"; then
+        echo -e "${YELLOW}[WARN] Memory Leak Listener non configurato${NC}"
         result=1
     else
-        echo -e "${GREEN}[OK] Memory Leak Listener found${NC}"
+        echo -e "${GREEN}[OK] Memory Leak Listener trovato${NC}"
         
-        # Check listener attributes
-        if grep -q "$LISTENER_CLASS.*gcDaemonProtection=\"false\"" "$SERVER_XML"; then
-            echo -e "${YELLOW}[WARN] GC Daemon Protection is disabled${NC}"
-            result=1
-        fi
+        # Verifica posizione corretta (dovrebbe essere tra i primi listener)
+        local listener_line=$(grep -n "JreMemoryLeakPreventionListener" "$SERVER_XML" | cut -d: -f1)
+        local server_line=$(grep -n "<Server" "$SERVER_XML" | cut -d: -f1)
         
-        if grep -q "$LISTENER_CLASS.*driverManagerProtection=\"false\"" "$SERVER_XML"; then
-            echo -e "${YELLOW}[WARN] Driver Manager Protection is disabled${NC}"
+        if [ $((listener_line - server_line)) -gt 10 ]; then
+            echo -e "${YELLOW}[WARN] Memory Leak Listener potrebbe non essere nella posizione ottimale${NC}"
             result=1
-        fi
-        
-        if grep -q "$LISTENER_CLASS.*urlCacheProtection=\"false\"" "$SERVER_XML"; then
-            echo -e "${YELLOW}[WARN] URL Cache Protection is disabled${NC}"
-            result=1
+        else
+            echo -e "${GREEN}[OK] Memory Leak Listener in posizione corretta${NC}"
         fi
     fi
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${SERVER_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$SERVER_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
+check_jvm_settings() {
+    local result=0
+    
+    echo "Controllo impostazioni JVM correlate..."
+    
+    # Verifica CATALINA_OPTS per impostazioni di memoria correlate
+    if [ -f "$TOMCAT_HOME/bin/setenv.sh" ]; then
+        if ! grep -q "gc.log" "$TOMCAT_HOME/bin/setenv.sh"; then
+            echo -e "${YELLOW}[WARN] GC logging non configurato${NC}"
+            result=1
+        else
+            echo -e "${GREEN}[OK] GC logging configurato${NC}"
+        fi
+    else
+        echo -e "${YELLOW}[WARN] setenv.sh non trovato, impossibile verificare le impostazioni JVM${NC}"
+        result=1
+    fi
+    
+    return $result
 }
 
 fix_memory_leak_listener() {
+    echo "Configurazione Memory Leak Listener..."
+    
+    # Crea backup prima delle modifiche
     create_backup
     
-    local temp_file=$(mktemp)
+    # Rimuovi eventuali configurazioni esistenti del Memory Leak Listener
+    sed -i '/<Listener.*JreMemoryLeakPreventionListener.*\/>/d' "$SERVER_XML"
     
-    if ! grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        # Add Memory Leak Listener if not present
-        sed '/<Server/a \    <Listener className="'"$LISTENER_CLASS"'" \
-        gcDaemonProtection="true" \
-        driverManagerProtection="true" \
-        urlCacheProtection="true" \
-        />' "$SERVER_XML" > "$temp_file"
+    # Aggiungi il nuovo Memory Leak Listener dopo il tag Server
+    sed -i "/<Server/a\\    $MEMORY_LEAK_LISTENER" "$SERVER_XML"
+    
+    echo -e "${GREEN}[OK] Memory Leak Listener configurato${NC}"
+    
+    # Verifica la configurazione
+    if grep -q "org.apache.catalina.core.JreMemoryLeakPreventionListener" "$SERVER_XML"; then
+        echo -e "${GREEN}[OK] Verifica configurazione completata${NC}"
     else
-        # Update existing Memory Leak Listener
-        sed '/'"$LISTENER_CLASS"'/ {
-            s/gcDaemonProtection="false"/gcDaemonProtection="true"/g
-            s/driverManagerProtection="false"/driverManagerProtection="true"/g
-            s/urlCacheProtection="false"/urlCacheProtection="true"/g
-        }' "$SERVER_XML" > "$temp_file"
-    fi
-    
-    # Apply changes
-    mv "$temp_file" "$SERVER_XML"
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    chmod 640 "$SERVER_XML"
-    
-    echo -e "${GREEN}[OK] Memory Leak Listener configuration updated${NC}"
-}
-
-verify_configuration() {
-    echo -e "\nVerifying configuration:"
-    
-    if grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        echo -e "${GREEN}[OK] Memory Leak Listener is configured${NC}"
-        grep -A 1 "$LISTENER_CLASS" "$SERVER_XML" | sed 's/^/  /'
-    else
-        echo -e "${RED}[ERROR] Memory Leak Listener not found after fix${NC}"
+        echo -e "${RED}[ERROR] Errore nella configurazione del Memory Leak Listener${NC}"
     fi
 }
 
-print_current_status() {
-    echo -e "\nCurrent Memory Leak Listener Configuration:"
-    if grep -q "$LISTENER_CLASS" "$SERVER_XML"; then
-        grep -A 1 "$LISTENER_CLASS" "$SERVER_XML" | sed 's/^/  /'
-    else
-        echo -e "${YELLOW}  Memory Leak Listener not configured${NC}"
+configure_jvm_settings() {
+    echo "Configurazione impostazioni JVM..."
+    
+    local setenv_file="$TOMCAT_HOME/bin/setenv.sh"
+    
+    # Crea o aggiorna setenv.sh
+    if [ ! -f "$setenv_file" ]; then
+        echo "#!/bin/bash" > "$setenv_file"
     fi
+    
+    # Aggiungi configurazioni GC logging se non presenti
+    if ! grep -q "gc.log" "$setenv_file"; then
+        echo 'CATALINA_OPTS="$CATALINA_OPTS -XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:$CATALINA_BASE/logs/gc.log"' >> "$setenv_file"
+    fi
+    
+    chmod +x "$setenv_file"
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$setenv_file"
+    
+    echo -e "${GREEN}[OK] Impostazioni JVM configurate${NC}"
 }
 
 main() {
-    echo "CIS 10.16 Check - Memory Leak Listener"
-    echo "------------------------------------"
+    echo "Controllo CIS 10.16 - Enable Memory Leak Listener"
+    echo "-----------------------------------------------"
     
+    check_root
+    check_tomcat_user
     check_file_exists
     
     local needs_fix=0
-    check_memory_leak_listener
+    
+    check_memory_leak_configuration
     needs_fix=$?
     
+    check_jvm_settings
+    needs_fix=$((needs_fix + $?))
+    
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
             fix_memory_leak_listener
-            verify_configuration
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review memory leak protection settings"
-            echo -e "2. Monitor memory usage"
-            echo -e "3. Check application stability"
-            echo -e "4. Restart Tomcat to apply changes"
-            echo -e "\n${YELLOW}[INFO] Memory leak protection enabled with default settings${NC}"
+            configure_jvm_settings
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+            echo -e "${YELLOW}NOTA: Monitorare i log GC per verificare il corretto funzionamento${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
