@@ -2,13 +2,14 @@
 
 # Script per il controllo e fix del CIS Control 2.4
 # Disable X-Powered-By HTTP Header and Rename the Server Value for all Connectors
+#
 # Lo script esegue le seguenti operazioni:
-# Verifica la presenza di X-Powered-By header e il suo stato
-# Controlla la personalizzazione dell'header Server
+#   Verifica la presenza di X-Powered-By header e il suo stato
+#   Controlla la personalizzazione dell'header Server
 # Se necessario, offre l'opzione di fix automatico che:
-# Disabilita X-Powered-By tramite HttpHeaderSecurityFilter
-# Personalizza il Server header per tutti i connettori
-# Crea backup dei file prima delle modifiche
+#   Disabilita X-Powered-By tramite HttpHeaderSecurityFilter
+#   Personalizza il Server header per tutti i connettori
+#   Crea backup dei file prima delle modifiche
 
 
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
