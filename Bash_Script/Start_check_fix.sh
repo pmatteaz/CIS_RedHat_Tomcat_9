@@ -27,10 +27,10 @@ print_section "3.1 Set a nondeterministic Shutdown command value"
 print_section "3.2 Disable the Shutdown port"
 ./CIS_3.2.sh
 # 4.1	    Restrict access to $CATALINA_HOME
-print_section "4.1 Restrict access to $CATALINA_HOME"
+print_section "4.1 Restrict access to \$CATALINA_HOME"
 ./CIS_4.1.sh
 # 4.2	    Restrict access to $CATALINA_BASE
-print_section "4.2 Restrict access to $CATALINA_BASE"
+print_section "4.2 Restrict access to \$CATALINA_BASE"
 ./CIS_4.2.sh
 # 4.3	    Restrict access to Tomcat configuration directory
 print_section "4.3 Restrict access to Tomcat configuration directory"

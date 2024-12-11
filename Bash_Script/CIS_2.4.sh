@@ -3,7 +3,6 @@
 # Script per il controllo e fix del CIS Control 2.4
 # Disable X-Powered-By HTTP Header and Rename the Server Value for all Connectors
 #Lo script esegue le seguenti operazioni:
-
 # Verifica la presenza di X-Powered-By header e il suo stato
 # Controlla la personalizzazione dell'header Server
 # Se necessario, offre l'opzione di fix automatico che:
