@@ -1,145 +1,251 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 6.2
+# Ensure SSLEnabled is set to True for Sensitive Connectors
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica dei connettori sensibili:
+#  Identificazione porte che richiedono SSL
+#  Controllo configurazione SSL completa
+#  Verifica protocolli e cipher suites
+# 
+# Controlli specifici per:
+#   SSLEnabled="true"
+#   Protocolli TLS sicuri
+#   Cipher suites raccomandate
+#   Configurazioni di sicurezza aggiuntive
+# 
+# 
+# Sistema di correzione:
+#   Backup delle configurazioni
+#   Applicazione configurazioni SSL sicure
+#   Rimozione configurazioni non sicure
+#   Verifica sintassi XML
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
-# Colors for output
+# Porte sensibili che richiedono SSL
+SENSITIVE_PORTS=(
+    "8443"  # HTTPS default
+    "8009"  # AJP default
+    "443"   # HTTPS standard
+)
+
+# Configurazione SSL raccomandata
+SSL_CONFIG="SSLEnabled=\"true\" maxThreads=\"150\" scheme=\"https\" secure=\"true\" 
+           clientAuth=\"false\" sslProtocol=\"TLS\" 
+           sslEnabledProtocols=\"TLSv1.2,TLSv1.3\"
+           ciphers=\"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\""
+
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$SERVER_XML" ]; then
-        echo -e "${RED}[ERROR] server.xml not found: $SERVER_XML${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_ssl_connectors() {
+check_file_exists() {
+    if [ ! -f "$SERVER_XML" ]; then
+        echo -e "${RED}[ERROR] File server.xml non trovato: $SERVER_XML${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_ssl_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
+    
+    echo "Creazione backup della configurazione..."
+    mkdir -p "$backup_dir"
+    
+    echo "# Backup permissions for server.xml" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    ls -l "$SERVER_XML" >> "$backup_file"
+    
+    if command -v getfacl &> /dev/null; then
+        getfacl "$SERVER_XML" > "${backup_dir}/server_xml.acl"
+    fi
+    
+    cp -p "$SERVER_XML" "$backup_dir/"
+    
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
+    fi
+    
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+}
+
+check_ssl_configuration() {
     local result=0
     
-    # Get all HTTP connectors
-    echo -e "\nChecking HTTP/AJP Connectors:"
-    while IFS= read -r connector; do
-        local port=$(echo "$connector" | grep -oP 'port="\K[^"]+')
-        local protocol=$(echo "$connector" | grep -oP 'protocol="\K[^"]+' || echo "HTTP/1.1")
-        local ssl_enabled=$(echo "$connector" | grep -oP 'SSLEnabled="\K[^"]+' || echo "false")
-        local scheme=$(echo "$connector" | grep -oP 'scheme="\K[^"]+' || echo "http")
-        
-        # Check if this is a sensitive connector (8443, admin ports, etc)
-        if [[ "$port" == "8443" || "$connector" =~ "admin" || "$scheme" == "https" ]]; then
-            echo -e "\nChecking sensitive connector on port $port:"
+    echo "Controllo configurazione SSL dei connettori..."
+    
+    # Estrai e analizza ogni connettore
+    while IFS= read -r line; do
+        if [[ $line =~ \<Connector ]]; then
+            echo -e "\nAnalisi connettore:"
+            echo "$line"
             
-            if [ "$ssl_enabled" != "true" ]; then
-                echo -e "${YELLOW}[WARN] SSL not enabled on sensitive port $port${NC}"
-                result=1
-            else
-                echo -e "${GREEN}[OK] SSL enabled on port $port${NC}"
-            fi
+            local port=""
+            local is_sensitive=0
             
-            # Check SSL configuration if enabled
-            if [ "$ssl_enabled" == "true" ]; then
-                # Check for required SSL attributes
-                local missing_attrs=0
-                for attr in "keystoreFile" "keystorePass" "clientAuth" "sslProtocol"; do
-                    if ! echo "$connector" | grep -q "$attr=\""; then
-                        echo -e "${YELLOW}[WARN] Missing $attr attribute${NC}"
-                        missing_attrs=1
+            # Estrai porta del connettore
+            if [[ $line =~ port=\"([0-9]+)\" ]]; then
+                port="${BASH_REMATCH[1]}"
+                
+                # Verifica se è una porta sensibile
+                for sensitive_port in "${SENSITIVE_PORTS[@]}"; do
+                    if [ "$port" = "$sensitive_port" ]; then
+                        is_sensitive=1
+                        break
                     fi
                 done
-                
-                # Check SSL protocol version
-                if echo "$connector" | grep -q "sslProtocol=\"TLS\""; then
-                    echo -e "${GREEN}[OK] Using TLS protocol${NC}"
+            fi
+            
+            # Controlla configurazione SSL per porte sensibili
+            if [ $is_sensitive -eq 1 ]; then
+                if ! [[ $line =~ SSLEnabled=\"true\" ]]; then
+                    echo -e "${YELLOW}[WARN] Connettore sulla porta $port non ha SSL abilitato${NC}"
+                    result=1
                 else
-                    echo -e "${YELLOW}[WARN] Not using TLS protocol${NC}"
+                    # Verifica configurazioni SSL aggiuntive
+                    if ! [[ $line =~ sslProtocol=\"TLS\" ]]; then
+                        echo -e "${YELLOW}[WARN] sslProtocol non configurato correttamente per porta $port${NC}"
+                        result=1
+                    fi
+                    
+                    if ! [[ $line =~ sslEnabledProtocols=\".*TLSv1\.2.*\" ]]; then
+                        echo -e "${YELLOW}[WARN] TLSv1.2 non abilitato per porta $port${NC}"
+                        result=1
+                    fi
+                    
+                    if ! [[ $line =~ secure=\"true\" ]]; then
+                        echo -e "${YELLOW}[WARN] attributo secure non impostato per porta $port${NC}"
+                        result=1
+                    fi
+                fi
+            fi
+            
+            # Controlla configurazioni non sicure
+            if [[ $line =~ SSLEnabled=\"true\" ]]; then
+                if [[ $line =~ allowUnsafeLegacyRenegotiation=\"true\" ]]; then
+                    echo -e "${YELLOW}[WARN] Rinegoziazione legacy non sicura abilitata${NC}"
                     result=1
                 fi
-                
-                [ $missing_attrs -eq 1 ] && result=1
             fi
         fi
-    done < <(grep -E "<Connector[^>]+(HTTP\/1.1|AJP\/1.3)" "$SERVER_XML")
+    done < "$SERVER_XML"
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${SERVER_XML}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$SERVER_XML" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
-}
-
-fix_ssl_connectors() {
-    local temp_file=$(mktemp)
-    cp "$SERVER_XML" "$temp_file"
+fix_ssl_configuration() {
+    echo "Correzione configurazione SSL..."
     
-    # Fix each connector
-    while IFS= read -r connector; do
-        local port=$(echo "$connector" | grep -oP 'port="\K[^"]+')
-        
-        # Check if this is a sensitive connector
-        if [[ "$port" == "8443" || "$connector" =~ "admin" || "$connector" =~ "scheme=\"https\"" ]]; then
-            # Prepare new connector configuration
-            local new_connector=$(echo "$connector" | \
-                sed 's/SSLEnabled="false"/SSLEnabled="true"/' | \
-                sed 's/scheme="http"/scheme="https"/' | \
-                sed 's/secure="false"/secure="true"/')
+    local temp_file=$(mktemp)
+    
+    while IFS= read -r line; do
+        if [[ $line =~ \<Connector ]]; then
+            local port=""
+            local is_sensitive=0
             
-            # Add SSL configuration if missing
-            if ! echo "$new_connector" | grep -q "keystoreFile"; then
-                new_connector=$(echo "$new_connector" | sed 's/>/ keystoreFile="${user.home}\/\.keystore" keystorePass="changeit" clientAuth="false" sslProtocol="TLS">/')
+            # Estrai porta
+            if [[ $line =~ port=\"([0-9]+)\" ]]; then
+                port="${BASH_REMATCH[1]}"
+                
+                # Verifica se è una porta sensibile
+                for sensitive_port in "${SENSITIVE_PORTS[@]}"; do
+                    if [ "$port" = "$sensitive_port" ]; then
+                        is_sensitive=1
+                        break
+                    fi
+                done
             fi
             
-            # Replace old connector with new one
-            sed -i "s|$connector|$new_connector|" "$temp_file"
+            if [ $is_sensitive -eq 1 ]; then
+                # Rimuovi configurazioni SSL esistenti
+                line=$(echo "$line" | sed -E 's/SSLEnabled="[^"]*"//g')
+                line=$(echo "$line" | sed -E 's/sslProtocol="[^"]*"//g')
+                line=$(echo "$line" | sed -E 's/sslEnabledProtocols="[^"]*"//g')
+                line=$(echo "$line" | sed -E 's/secure="[^"]*"//g')
+                line=$(echo "$line" | sed -E 's/ciphers="[^"]*"//g')
+                
+                # Aggiungi nuova configurazione SSL
+                line=$(echo "$line" | sed 's/>/ '"$SSL_CONFIG"'>/')
+            fi
+            
+            # Rimuovi configurazioni non sicure
+            line=$(echo "$line" | sed 's/allowUnsafeLegacyRenegotiation="true"//')
         fi
-    done < <(grep -E "<Connector[^>]+(HTTP\/1.1|AJP\/1.3)" "$SERVER_XML")
+        echo "$line" >> "$temp_file"
+    done < "$SERVER_XML"
     
-    # Apply changes
     mv "$temp_file" "$SERVER_XML"
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    chmod 640 "$SERVER_XML"
+    chmod 600 "$SERVER_XML"
     
-    echo -e "${GREEN}[OK] SSL configuration updated${NC}"
+    echo -e "${GREEN}[OK] Configurazione SSL corretta${NC}"
 }
 
-print_current_status() {
-    echo -e "\nCurrent SSL Connector Status:"
-    grep -E "<Connector[^>]+(HTTP\/1.1|AJP\/1.3)" "$SERVER_XML" | sed 's/^/  /'
+verify_xml_syntax() {
+    if command -v xmllint &> /dev/null; then
+        if ! xmllint --noout "$SERVER_XML" 2>/dev/null; then
+            echo -e "${RED}[ERROR] Errore di sintassi XML in server.xml${NC}"
+            return 1
+        fi
+        echo -e "${GREEN}[OK] Sintassi XML corretta${NC}"
+    else
+        echo -e "${YELLOW}[WARN] xmllint non disponibile, skip verifica sintassi XML${NC}"
+    fi
+    return 0
 }
 
 main() {
-    echo "CIS 6.2 Check - SSL Configuration"
-    echo "--------------------------------"
+    echo "Controllo CIS 6.2 - Ensure SSLEnabled is set to True for Sensitive Connectors"
+    echo "------------------------------------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_ssl_connectors
+    
+    check_ssl_configuration
     needs_fix=$?
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
             create_backup
-            fix_ssl_connectors
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Configure proper keystore location and password"
-            echo -e "2. Restart Tomcat to apply changes"
-            echo -e "\n${YELLOW}[WARNING] Default keystore settings were applied. Please update them!${NC}"
+            fix_ssl_configuration
+            if verify_xml_syntax; then
+                echo -e "\n${GREEN}Fix completato.${NC}"
+                echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Verificare il funzionamento delle connessioni SSL${NC}"
+                echo -e "${YELLOW}NOTA: Assicurarsi che i certificati SSL siano configurati correttamente${NC}"
+            else
+                echo -e "\n${RED}[ERROR] Errore durante l'applicazione delle modifiche${NC}"
+                echo -e "${YELLOW}NOTA: Ripristinare il backup e verificare manualmente la configurazione${NC}"
+            fi
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
