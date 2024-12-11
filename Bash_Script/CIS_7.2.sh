@@ -1,177 +1,255 @@
 #!/bin/bash
 
-# Configuration
+# Script per il controllo e fix del CIS Control 7.2
+# Specify file handler in logging.properties files
+#
+# Lo script implementa le seguenti funzionalità:
+# Verifica della configurazione dei file handler:
+#   Controllo delle configurazioni obbligatorie
+#   Verifica dei parametri di sicurezza
+#   Controllo directory e permessi
+# 
+# Controlli specifici per:
+#   FileHandler e ConsoleHandler
+#   Configurazioni di formattazione
+#   Encoding e buffering
+#   Rotazione dei log
+# 
+# Sistema di correzione:
+#   Backup delle configurazioni
+#   Applicazione configurazioni raccomandate
+#   Correzione permessi file e directory
+#   Rotazione automatica dei log
+
+# Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-LOGGING_PROPERTIES="$TOMCAT_HOME/conf/logging.properties"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
 TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+LOGGING_PROPS="$TOMCAT_HOME/conf/logging.properties"
+LOG_DIR="$TOMCAT_HOME/logs"
 
-# Required handlers
-declare -A REQUIRED_HANDLERS=(
-    ["catalina"]="org.apache.juli.AsyncFileHandler"
-    ["localhost"]="org.apache.juli.AsyncFileHandler"
-    ["manager"]="org.apache.juli.AsyncFileHandler"
-    ["host-manager"]="org.apache.juli.AsyncFileHandler"
-    ["admin"]="org.apache.juli.AsyncFileHandler"
-)
+# Configurazione raccomandata per file handler
+HANDLER_CONFIG="
+handlers = org.apache.juli.FileHandler, java.util.logging.ConsoleHandler
 
-# Colors for output
+# File handler configuration
+org.apache.juli.FileHandler.level = FINE
+org.apache.juli.FileHandler.directory = ${LOG_DIR}
+org.apache.juli.FileHandler.prefix = tomcat_
+org.apache.juli.FileHandler.suffix = .log
+org.apache.juli.FileHandler.formatter = org.apache.juli.OneLineFormatter
+org.apache.juli.FileHandler.maxDays = 90
+org.apache.juli.FileHandler.encoding = UTF-8
+org.apache.juli.FileHandler.rotatable = true
+org.apache.juli.FileHandler.buffered = false
+
+# Console handler configuration
+java.util.logging.ConsoleHandler.level = FINE
+java.util.logging.ConsoleHandler.formatter = org.apache.juli.OneLineFormatter
+java.util.logging.ConsoleHandler.encoding = UTF-8
+
+# Root logger configuration
+.level = INFO"
+
+# Colori per output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-check_file_exists() {
-    if [ ! -f "$LOGGING_PROPERTIES" ]; then
-        echo -e "${RED}[ERROR] logging.properties not found: $LOGGING_PROPERTIES${NC}"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}[ERROR] Questo script deve essere eseguito come root${NC}"
         exit 1
     fi
 }
 
-check_handlers() {
-    local result=0
+check_file_exists() {
+    if [ ! -f "$LOGGING_PROPS" ]; then
+        echo -e "${RED}[ERROR] File logging.properties non trovato: $LOGGING_PROPS${NC}"
+        exit 1
+    fi
+}
+
+create_backup() {
+    local backup_dir="/tmp/tomcat_logging_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${backup_dir}/backup_info.txt"
     
-    echo -e "\nChecking file handlers configuration:"
+    echo "Creazione backup della configurazione..."
     
-    # Check for handlers definition
-    if ! grep -q "^handlers = " "$LOGGING_PROPERTIES"; then
-        echo -e "${YELLOW}[WARN] No handlers defined in logging.properties${NC}"
-        result=1
+    mkdir -p "$backup_dir"
+    
+    # Salva informazioni sui permessi attuali
+    echo "# Backup permissions for logging.properties" > "$backup_file"
+    echo "# Created: $(date)" >> "$backup_file"
+    echo "# Original file: $LOGGING_PROPS" >> "$backup_file"
+    ls -l "$LOGGING_PROPS" >> "$backup_file"
+    
+    # Backup dei permessi usando getfacl
+    if command -v getfacl &> /dev/null; then
+        getfacl "$LOGGING_PROPS" > "${backup_dir}/logging_properties.acl"
     fi
     
-    # Check each required handler
-    for handler in "${!REQUIRED_HANDLERS[@]}"; do
-        echo -e "\nChecking $handler handler:"
-        
-        local handler_class="${REQUIRED_HANDLERS[$handler]}"
-        local handler_pattern="^${handler}.${handler_class}"
-        
-        if ! grep -q "$handler_pattern" "$LOGGING_PROPERTIES"; then
-            echo -e "${YELLOW}[WARN] Missing handler: $handler${NC}"
+    # Copia fisica del file
+    cp -p "$LOGGING_PROPS" "$backup_dir/"
+    
+    # Verifica hash del file
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$LOGGING_PROPS" > "${backup_dir}/logging.properties.sha256"
+    fi
+    
+    # Crea un tarball del backup
+    tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
+    rm -rf "$backup_dir"
+    
+    echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
+}
+
+check_handler_config() {
+    local result=0
+    
+    echo "Controllo configurazione file handler..."
+    
+    # Verifica handlers definiti
+    if ! grep -q "^handlers = .*FileHandler" "$LOGGING_PROPS"; then
+        echo -e "${YELLOW}[WARN] FileHandler non configurato correttamente${NC}"
+        result=1
+    else
+        echo -e "${GREEN}[OK] FileHandler configurato${NC}"
+    fi
+    
+    # Verifica configurazioni obbligatorie
+    local required_configs=(
+        "org.apache.juli.FileHandler.level"
+        "org.apache.juli.FileHandler.directory"
+        "org.apache.juli.FileHandler.prefix"
+        "org.apache.juli.FileHandler.suffix"
+        "org.apache.juli.FileHandler.formatter"
+    )
+    
+    for config in "${required_configs[@]}"; do
+        if ! grep -q "^$config = " "$LOGGING_PROPS"; then
+            echo -e "${YELLOW}[WARN] Configurazione mancante: $config${NC}"
             result=1
-        else
-            echo -e "${GREEN}[OK] Handler found: $handler${NC}"
-            
-            # Check handler properties
-            local properties=(
-                "level"
-                "prefix"
-                "suffix"
-                "directory"
-                "encoding"
-            )
-            
-            for prop in "${properties[@]}"; do
-                if ! grep -q "^${handler}.${handler_class}.${prop}" "$LOGGING_PROPERTIES"; then
-                    echo -e "${YELLOW}[WARN] Missing property $prop for handler $handler${NC}"
-                    result=1
-                fi
-            done
         fi
     done
     
-    # Check for console handler
-    if ! grep -q "^1catalina.org.apache.juli.AsyncFileHandler.level" "$LOGGING_PROPERTIES"; then
-        echo -e "${YELLOW}[WARN] Console handler not properly configured${NC}"
+    # Verifica directory di log
+    if grep -q "^org.apache.juli.FileHandler.directory = " "$LOGGING_PROPS"; then
+        local log_dir=$(grep "^org.apache.juli.FileHandler.directory = " "$LOGGING_PROPS" | cut -d'=' -f2 | tr -d ' ')
+        if [ ! -d "$log_dir" ]; then
+            echo -e "${YELLOW}[WARN] Directory di log non esistente: $log_dir${NC}"
+            result=1
+        else
+            # Verifica permessi directory
+            local dir_perms=$(stat -c '%a' "$log_dir")
+            if [ "$dir_perms" != "750" ]; then
+                echo -e "${YELLOW}[WARN] Permessi directory log non corretti: $dir_perms (dovrebbero essere 750)${NC}"
+                result=1
+            fi
+        fi
+    fi
+    
+    # Verifica configurazioni di sicurezza
+    if ! grep -q "^org.apache.juli.FileHandler.buffered = false" "$LOGGING_PROPS"; then
+        echo -e "${YELLOW}[WARN] Buffering non disabilitato - potenziale rischio di perdita log${NC}"
+        result=1
+    fi
+    
+    if ! grep -q "^org.apache.juli.FileHandler.encoding = UTF-8" "$LOGGING_PROPS"; then
+        echo -e "${YELLOW}[WARN] Encoding non specificato${NC}"
         result=1
     fi
     
     return $result
 }
 
-create_backup() {
-    local backup_file="${LOGGING_PROPERTIES}.$(date +%Y%m%d_%H%M%S).bak"
-    cp "$LOGGING_PROPERTIES" "$backup_file"
-    echo -e "${GREEN}[OK] Backup created: $backup_file${NC}"
+fix_handler_config() {
+    echo "Applicazione configurazione file handler..."
+    
+    # Assicurati che la directory di log esista
+    mkdir -p "$LOG_DIR"
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOG_DIR"
+    chmod 750 "$LOG_DIR"
+    
+    # Applica la configurazione raccomandata
+    echo "$HANDLER_CONFIG" > "$LOGGING_PROPS"
+    
+    # Imposta i permessi corretti
+    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOGGING_PROPS"
+    chmod 600 "$LOGGING_PROPS"
+    
+    echo -e "${GREEN}[OK] Configurazione file handler corretta applicata${NC}"
 }
 
-fix_handlers() {
-    create_backup
+check_log_files() {
+    local result=0
     
-    # Initialize handlers line
-    local handlers_line="handlers = "
+    echo "Controllo file di log esistenti..."
     
-    # Add standard handlers configuration
-    for handler in "${!REQUIRED_HANDLERS[@]}"; do
-        handlers_line+="${handler}.${REQUIRED_HANDLERS[$handler]}, "
-        
-        # Add handler configuration if missing
-        if ! grep -q "^${handler}.${REQUIRED_HANDLERS[$handler]}" "$LOGGING_PROPERTIES"; then
-            echo "
-# Handler configuration for $handler
-${handler}.${REQUIRED_HANDLERS[$handler]}.level = FINE
-${handler}.${REQUIRED_HANDLERS[$handler]}.directory = \${catalina.base}/logs
-${handler}.${REQUIRED_HANDLERS[$handler]}.prefix = ${handler}.
-${handler}.${REQUIRED_HANDLERS[$handler]}.suffix = .log
-${handler}.${REQUIRED_HANDLERS[$handler]}.encoding = UTF-8
-${handler}.${REQUIRED_HANDLERS[$handler]}.maxDays = 90" >> "$LOGGING_PROPERTIES"
-        fi
-    done
-    
-    # Update handlers line
-    if grep -q "^handlers = " "$LOGGING_PROPERTIES"; then
-        sed -i "s/^handlers = .*/$handlers_line/" "$LOGGING_PROPERTIES"
-    else
-        # Add handlers line at the beginning of the file
-        sed -i "1i$handlers_line" "$LOGGING_PROPERTIES"
+    if [ -d "$LOG_DIR" ]; then
+        find "$LOG_DIR" -type f -name "*.log" | while read -r log_file; do
+            local file_perms=$(stat -c '%a' "$log_file")
+            local file_owner=$(stat -c '%U' "$log_file")
+            local file_group=$(stat -c '%G' "$log_file")
+            
+            if [ "$file_perms" != "640" ]; then
+                echo -e "${YELLOW}[WARN] Permessi non corretti per $log_file: $file_perms (dovrebbero essere 640)${NC}"
+                result=1
+            fi
+            
+            if [ "$file_owner" != "$TOMCAT_USER" ] || [ "$file_group" != "$TOMCAT_GROUP" ]; then
+                echo -e "${YELLOW}[WARN] Proprietario/gruppo non corretti per $log_file${NC}"
+                result=1
+            fi
+        done
     fi
     
-    # Add console handler if missing
-    if ! grep -q "^1catalina.org.apache.juli.AsyncFileHandler.level" "$LOGGING_PROPERTIES"; then
-        echo "
-# Console handler configuration
-1catalina.org.apache.juli.AsyncFileHandler.level = FINE
-1catalina.org.apache.juli.AsyncFileHandler.directory = \${catalina.base}/logs
-1catalina.org.apache.juli.AsyncFileHandler.prefix = catalina.
-1catalina.org.apache.juli.AsyncFileHandler.encoding = UTF-8
-1catalina.org.apache.juli.AsyncFileHandler.maxDays = 90" >> "$LOGGING_PROPERTIES"
-    fi
-    
-    # Set proper permissions
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOGGING_PROPERTIES"
-    chmod 640 "$LOGGING_PROPERTIES"
-    
-    echo -e "${GREEN}[OK] File handlers configuration updated${NC}"
+    return $result
 }
 
-print_current_status() {
-    echo -e "\nCurrent Logging Configuration:"
-    echo -e "\nGlobal handlers:"
-    grep "^handlers = " "$LOGGING_PROPERTIES" | sed 's/^/  /'
+fix_log_files() {
+    echo "Correzione permessi file di log..."
     
-    echo -e "\nHandler configurations:"
-    for handler in "${!REQUIRED_HANDLERS[@]}"; do
-        echo -e "\n  $handler handler:"
-        grep -A 6 "^${handler}.${REQUIRED_HANDLERS[$handler]}" "$LOGGING_PROPERTIES" | sed 's/^/    /'
-    done
+    if [ -d "$LOG_DIR" ]; then
+        find "$LOG_DIR" -type f -name "*.log" -exec chown "$TOMCAT_USER:$TOMCAT_GROUP" {} \;
+        find "$LOG_DIR" -type f -name "*.log" -exec chmod 640 {} \;
+    fi
+    
+    echo -e "${GREEN}[OK] Permessi file di log corretti${NC}"
 }
 
 main() {
-    echo "CIS 7.2 Check - File Handlers Configuration"
-    echo "-----------------------------------------"
+    echo "Controllo CIS 7.2 - Specify file handler in logging.properties"
+    echo "--------------------------------------------------------"
     
+    check_root
     check_file_exists
     
     local needs_fix=0
-    check_handlers
-    needs_fix=$?
+    
+    check_handler_config
+    needs_fix=$((needs_fix + $?))
+    
+    check_log_files
+    needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
-        print_current_status
-        
-        echo -e "\n${YELLOW}Proceed with fix? (y/n)${NC}"
+        echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
+        
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            fix_handlers
-            echo -e "\n${GREEN}Fix completed. Please:${NC}"
-            echo -e "1. Review log levels for each handler"
-            echo -e "2. Verify log rotation settings"
-            echo -e "3. Restart Tomcat to apply changes"
+            create_backup
+            fix_handler_config
+            fix_log_files
+            echo -e "\n${GREEN}Fix completato.${NC}"
+            echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
+            echo -e "${YELLOW}NOTA: Verificare che il logging funzioni correttamente${NC}"
         else
-            echo -e "\n${YELLOW}Fix cancelled by user${NC}"
+            echo -e "\n${YELLOW}Fix annullato dall'utente${NC}"
         fi
     else
-        echo -e "\n${GREEN}All checks passed. No fix needed.${NC}"
+        echo -e "\n${GREEN}Tutti i controlli sono passati. Nessun fix necessario.${NC}"
     fi
 }
 
