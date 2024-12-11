@@ -1,4 +1,5 @@
 #!/bin/bash
+#
 # Script per il controllo e fix del CIS Control 2.5
 # Disable client facing Stack Traces
 #
