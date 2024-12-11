@@ -3,7 +3,7 @@
 # Script per il controllo e fix del CIS Control 2.5
 # Disable client facing Stack Traces
 #
-#Lo script implementa le seguenti funzionalità:
+# Lo script implementa le seguenti funzionalità:
 # Verifica la presenza di pagine di errore personalizzate
 # Controlla la configurazione della gestione degli errori in web.xml
 # Se necessario, offre l'opzione di fix automatico che:
