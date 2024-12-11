@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Script per il controllo e fix del CIS Control 4.4
+# Restrict access to Tomcat logs directory
+
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 LOGS_DIR="$TOMCAT_HOME/logs"
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
