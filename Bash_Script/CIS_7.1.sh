@@ -86,7 +86,7 @@ check_root() {
 
 create_backup() {
     local file="$1"
-    local backup_dir="/tmp/tomcat_applog_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_applog_backup_$(date +%Y%m%d_%H%M%S)_CIS_7.1"
     local backup_file="${backup_dir}/backup_info.txt"
     
     echo "Creazione backup della configurazione..."

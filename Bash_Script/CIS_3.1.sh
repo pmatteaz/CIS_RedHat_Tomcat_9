@@ -100,7 +100,8 @@ check_file_permissions() {
 
 fix_shutdown_command() {
     # Backup del file
-    cp "$SERVER_XML" "${SERVER_XML}.bak"
+    timestamp=$(date +%Y%m%d_%H%M%S)_CIS_3.1
+    cp "$SERVER_XML" "${SERVER_XML}.${timestamp}.bak"
     
     # Genera un nuovo comando di shutdown
     local new_command=$(generate_random_string $((MIN_LENGTH + 10)))

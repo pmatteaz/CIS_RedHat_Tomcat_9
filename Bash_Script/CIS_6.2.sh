@@ -62,7 +62,7 @@ check_file_exists() {
 }
 
 create_backup() {
-    local backup_dir="/tmp/tomcat_ssl_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_ssl_backup_$(date +%Y%m%d_%H%M%S)_CIS_6.2"
     local backup_file="${backup_dir}/backup_info.txt"
     
     echo "Creazione backup della configurazione..."

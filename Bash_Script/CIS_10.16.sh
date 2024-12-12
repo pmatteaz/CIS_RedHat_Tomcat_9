@@ -61,7 +61,7 @@ check_file_exists() {
 }
 
 create_backup() {
-    local backup_dir="/tmp/tomcat_memory_leak_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_memory_leak_backup_$(date +%Y%m%d_%H%M%S)_CIS_10.16"
     local backup_file="${backup_dir}/permissions_backup.txt"
     
     echo "Creazione backup della configurazione..."

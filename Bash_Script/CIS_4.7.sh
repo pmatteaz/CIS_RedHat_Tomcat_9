@@ -75,7 +75,7 @@ check_directory_exists() {
 }
 
 create_backup() {
-    local backup_dir="/tmp/tomcat_webapps_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_webapps_backup_$(date +%Y%m%d_%H%M%S)_CIS_4.7"
     local backup_file="${backup_dir}/permissions_backup.txt"
     
     echo "Creazione backup della configurazione..."

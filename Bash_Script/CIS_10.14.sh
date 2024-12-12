@@ -56,7 +56,7 @@ check_files_exist() {
 
 create_backup() {
     local file="$1"
-    local backup_dir="/tmp/tomcat_crosscontext_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_crosscontext_backup_$(date +%Y%m%d_%H%M%S)_CIS_10.14"
     local backup_file="${backup_dir}/backup_info.txt"
     
     echo "Creazione backup della configurazione..."

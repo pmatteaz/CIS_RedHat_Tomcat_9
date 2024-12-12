@@ -133,7 +133,8 @@ EOF
 
 fix_error_handling() {
     # Backup del file
-    cp "$WEB_XML" "${WEB_XML}.bak"
+    timestamp=$(date +%Y%m%d_%H%M%S)_CIS_2.5
+    cp "$WEB_XML" "${WEB_XML}.${timestamp}.bak"
     
     # Aggiunge configurazioni error-page se non presenti
     if ! grep -q "<error-page>" "$WEB_XML"; then

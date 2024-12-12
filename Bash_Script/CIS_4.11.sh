@@ -66,7 +66,7 @@ check_file_exists() {
 }
 
 create_backup() {
-    local backup_dir="/tmp/tomcat_logging_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_logging_backup_$(date +%Y%m%d_%H%M%S)_CIS_4.11"
     local backup_file="${backup_dir}/permissions_backup.txt"
     
     echo "Creazione backup della configurazione..."

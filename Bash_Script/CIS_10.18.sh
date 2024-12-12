@@ -49,7 +49,7 @@ check_directories() {
 
 create_backup() {
     local app_dir="$1"
-    local backup_dir="/tmp/tomcat_webapp_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/tmp/tomcat_webapp_backup_$(date +%Y%m%d_%H%M%S)_CIS_10.18"
     
     echo "Creazione backup della configurazione per $(basename "$app_dir")..."
     

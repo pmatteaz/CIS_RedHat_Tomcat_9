@@ -82,7 +82,8 @@ fix_shutdown_port() {
     echo "Disabilitazione porta shutdown..."
     
     # Backup del file
-    cp "$SERVER_XML" "${SERVER_XML}.bak"
+    timestamp=$(date +%Y%m%d_%H%M%S)_CIS_3.2
+    cp "$SERVER_XML" "${SERVER_XML}.${timestamp}bak"
     
     # Modifica la porta a -1
     if grep -q '<Server port="[0-9]*"' "$SERVER_XML"; then

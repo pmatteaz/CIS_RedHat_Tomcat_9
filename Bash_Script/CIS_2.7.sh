@@ -76,8 +76,9 @@ fix_server_header() {
     echo "Applicazione delle correzioni..."
     
     # Backup dei file
-    cp "$SERVER_XML" "${SERVER_XML}.bak"
-    cp "$CATALINA_PROPERTIES" "${CATALINA_PROPERTIES}.bak"
+    timestamp=$(date +%Y%m%d_%H%M%S)_CIS_2.7
+    cp "$SERVER_XML" "${SERVER_XML}.${timestamp}.bak"
+    cp "$CATALINA_PROPERTIES" "${CATALINA_PROPERTIES}.${timestamp}.bak"
     
     # Modifica server.xml
     # Aggiunge o aggiorna l'attributo server per tutti i connettori
