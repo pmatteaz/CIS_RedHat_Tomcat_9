@@ -11,6 +11,8 @@
 #   Personalizza il Server header per tutti i connettori
 #   Crea backup dei file prima delle modifiche
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
@@ -23,7 +25,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 check_tomcat_home() {
-    if [ ! -d "$TOMCAT_HOME" ]; then
+    if [ -d "$TOMCAT_HOME" ]; then
+        echo -e "${GREEN}[OK] Directory Tomcat trovata: $TOMCAT_HOME${NC}"
+        else
         echo -e "${RED}[ERROR] Directory Tomcat non trovata: $TOMCAT_HOME${NC}"
         exit 1
     fi
@@ -34,7 +38,7 @@ check_xpowered_by() {
     
     # Controlla se x-powered-by è disabilitato in web.xml
     if grep -q "org.apache.catalina.filters.HttpHeaderSecurityFilter" "$WEB_XML"; then
-        if grep -q "xpoweredBy=\"false\"" "$WEB_XML"; then
+        if grep -A1 "<param-name>xpoweredBy</param-name>" "$WEB_XML" | grep "<param-value>false</param-value>"; then
             echo -e "${GREEN}[OK] X-Powered-By header è già disabilitato${NC}"
         else
             echo -e "${YELLOW}[WARN] X-Powered-By header non è disabilitato${NC}"
@@ -63,8 +67,9 @@ check_server_header() {
 }
 
 fix_xpowered_by() {
-    # Backup del file
-    cp "$WEB_XML" "${WEB_XML}.bak"
+    # Backup del file configurazione
+    timestamp=$(date +%Y%m%d_%H%M%S)_CIS_2.4
+    cp "$WEB_XML" "${WEB_XML}.${timestamp}.bak"
     
     # Aggiunge o aggiorna HttpHeaderSecurityFilter
     if ! grep -q "org.apache.catalina.filters.HttpHeaderSecurityFilter" "$WEB_XML"; then
@@ -90,10 +95,18 @@ fix_xpowered_by() {
 
 fix_server_header() {
     # Backup del file
-    cp "$SERVER_XML" "${SERVER_XML}.bak"
+    timestamp=$(date +%Y%m%d_%H%M%S)_CIS_2.4
+    cp "$SERVER_XML" "${SERVER_XML}.${timestamp}.bak"
     
     # Aggiunge o aggiorna l'attributo server per tutti i connettori
-    sed -i '/<Connector/s/>/ server="Apache">/' "$SERVER_XML"
+    # Applica la modifica gestendo il multi-riga
+    sed -i '
+    /<[Cc]onnector/,/>/ {
+        />/ {
+            /server=/ ! s/[[:space:]]*>/& server="Apache">/
+        }
+    }
+' "$SERVER_XML"
     
     echo -e "${GREEN}[OK] Server header personalizzato${NC}"
 }
