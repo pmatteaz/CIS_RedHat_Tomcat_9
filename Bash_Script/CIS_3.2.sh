@@ -17,6 +17,9 @@
 #
 # Crea backup dei file prima delle modifiche
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
@@ -39,7 +42,7 @@ check_shutdown_port() {
     echo "Controllo configurazione porta shutdown..."
     
     # Verifica la presenza dell'attributo port nel Server
-    if grep -q '<Server port="[0-9]*"' "$SERVER_XML"; then
+    if grep -Eq '<Server port=\"([0-9]*|-1)\"' "$SERVER_XML"; then
         local port=$(grep -oP '(?<=<Server port=")[^"]*' "$SERVER_XML")
         
         # Verifica se la porta è -1 (disabilitata)
@@ -83,7 +86,7 @@ fix_shutdown_port() {
     
     # Backup del file
     timestamp=$(date +%Y%m%d_%H%M%S)_CIS_3.2
-    cp "$SERVER_XML" "${SERVER_XML}.${timestamp}bak"
+    cp "$SERVER_XML" "${SERVER_XML}.${timestamp}.bak"
     
     # Modifica la porta a -1
     if grep -q '<Server port="[0-9]*"' "$SERVER_XML"; then

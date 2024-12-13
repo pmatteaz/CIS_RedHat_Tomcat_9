@@ -20,6 +20,8 @@
 # 
 # Crea backup dei file prima delle modifiche
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
