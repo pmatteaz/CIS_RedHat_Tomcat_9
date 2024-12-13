@@ -22,7 +22,7 @@
 #   File catalina.properties: 600
 #   Directory padre: 750
 #   Proprietà: tomcat:tomcat
-#   Attributo immutabile
+#   ## in questa versione COMMENTATO ## Attributo immutabile
 
 # Cerca e setta la home di tomcat
 . ./Find_catalinaHome.sh
