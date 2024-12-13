@@ -35,7 +35,7 @@
 # Configurazione predefinita
 CATALINA_BASE=${CATALINA_HOME}
 CATALINA_BASE=${CATALINA_BASE:-/usr/share/tomcat}
-TOMCAT_USER=${CATALINA_USER_USER:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
 TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 
 # Directories da proteggere in CATALINA_BASE
@@ -221,7 +221,7 @@ fix_permissions() {
                 chmod 700 "$dir"
                 find "$dir" -type f -exec chmod 600 {} \;
                 ;;
-            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work")
+            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work" | "$CATALINA_BASE/bin")
                 chmod 750 "$dir"
                 find "$dir" -type f -exec chmod 640 {} \;
                 ;;
