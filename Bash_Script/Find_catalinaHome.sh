@@ -70,4 +70,28 @@ set_tomcat_home() {
     fi
 }
 
+find_tomcat_user(){
+    CATALINA_USER=$(ps -ef | grep [t]omcat | awk '{print $1}')
+    CATALINA_GROUP=$(id $CATALINA_USER | cut -d'(' -f3 |cut -d')' -f1)
+    if [[ -n $CATALINA_USER && -n $CATALINA_GROUP ]]; then
+        export CATALINA_USER
+        export CATALINA_GROUP
+        return 0
+    else
+        return 1 
+    fi
+}
+
+set_tomcat_user() {
+ find_tomcat_user
+ if [ $? -eq 0 ]; then
+        echo "CATALINA_USER  impostato a: $CATALINA_USER"
+        echo "CATALINA_GROUP impostato a: $CATALINA_GROUP"
+        return 0
+    else
+        return 1
+    fi
+}
+
 set_tomcat_home
+set_tomcat_user

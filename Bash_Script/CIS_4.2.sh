@@ -29,11 +29,14 @@
 # logs, temp, work: 750 (dir), 640 (files)
 # altre directory: 750 (dir), 640 (files)
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 # Configurazione predefinita
+CATALINA_BASE=${CATALINA_HOME}
 CATALINA_BASE=${CATALINA_BASE:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 
 # Directories da proteggere in CATALINA_BASE
 PROTECTED_DIRS=(

@@ -21,10 +21,15 @@
 # Gestisce permessi speciali per directory sensibili
 # Esegue una copia di backup della configurazione.
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
+# Cercare User e Group di Tomcat
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 
 # Directories da proteggere
 PROTECTED_DIRS=(
@@ -76,7 +81,7 @@ check_permissions() {
     echo "Controllo permessi directories..."
     
     for dir in "${PROTECTED_DIRS[@]}"; do
-        if [ ! -d "$dir" ]; then
+            if [ ! -d "$dir" ]; then
             echo -e "${YELLOW}[WARN] Directory non trovata: $dir${NC}"
             continue
         fi
@@ -108,7 +113,7 @@ check_permissions() {
             "$TOMCAT_HOME/conf")
                 expected_perms="700"
                 ;;
-            "$TOMCAT_HOME/logs" | "$TOMCAT_HOME/temp" | "$TOMCAT_HOME/work")
+            "$TOMCAT_HOME/logs" | "$TOMCAT_HOME/temp" | "$TOMCAT_HOME/work" | "$TOMCAT_HOME/bin")
                 expected_perms="750"
                 ;;
             *)
@@ -135,7 +140,7 @@ check_permissions() {
                     result=1
                 fi
                 
-                if [ "$file_perms" -gt "640" ]; then
+                if [ "$file_perms" -gt "750" ]; then
                     echo -e "${YELLOW}[WARN] File con permessi troppo permissivi: $file ($file_perms)${NC}"
                     result=1
                 fi
