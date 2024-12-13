@@ -157,7 +157,7 @@ check_permissions() {
             "$CATALINA_BASE/conf")
                 expected_perms="700"
                 ;;
-            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work")
+            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work" | "$CATALINA_BASE/bin" )
                 expected_perms="750"
                 ;;
             *)
@@ -221,9 +221,13 @@ fix_permissions() {
                 chmod 700 "$dir"
                 find "$dir" -type f -exec chmod 600 {} \;
                 ;;
-            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work" | "$CATALINA_BASE/bin")
+            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work")
                 chmod 750 "$dir"
                 find "$dir" -type f -exec chmod 640 {} \;
+                ;;
+            "$CATALINA_BASE/bin")
+                chmod 750 "$dir"
+                find "$dir/*.sh" -type f -exec chmod 750 {} \;
                 ;;
             *)
                 chmod 750 "$dir"

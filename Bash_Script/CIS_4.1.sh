@@ -214,6 +214,10 @@ fix_permissions() {
                 chmod 750 "$dir"
                 find "$dir" -type f -exec chmod 640 {} \;
                 ;;
+            "$TOMCAT_HOME/bin")
+                chmod 750 "$dir"
+                find "$dir/*.sh" -type f -exec chmod 750 {} \;
+                ;;
             *)
                 chmod 750 "$dir"
                 find "$dir" -type f -exec chmod 640 {} \;
