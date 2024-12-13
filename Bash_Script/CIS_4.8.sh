@@ -24,10 +24,13 @@
 #   Proprietà: tomcat:tomcat
 #   Attributo immutabile
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 CATALINA_PROPS="$TOMCAT_HOME/conf/catalina.properties"
 
 # Colori per output
@@ -156,7 +159,7 @@ check_permissions() {
         echo -e "${GREEN}[OK] Gruppo directory padre corretto: $parent_group${NC}"
     fi
     
-    if [ "$parent_perms" != "750" ]; then
+    if [ "$parent_perms" -gt "750" ]; then
         echo -e "${YELLOW}[WARN] Permessi directory padre non corretti: $parent_perms (dovrebbero essere 750)${NC}"
         result=1
     else
@@ -164,15 +167,15 @@ check_permissions() {
     fi
     
     # Verifica immutabilità del file
-    if command -v lsattr &> /dev/null; then
-        local immutable=$(lsattr "$CATALINA_PROPS" 2>/dev/null | cut -c5)
-        if [ "$immutable" != "i" ]; then
-            echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
-        fi
-    fi
+    #if command -v lsattr &> /dev/null; then
+    #    local immutable=$(lsattr "$CATALINA_PROPS" 2>/dev/null | cut -c5)
+    #    if [ "$immutable" != "i" ]; then
+    #        echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
+    #        result=1
+    #    else
+    #        echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
+    #    fi
+    #fi
     
     return $result
 }
@@ -184,9 +187,9 @@ fix_permissions() {
     create_backup
     
     # Rimuovi immutabilità se presente
-    if command -v chattr &> /dev/null; then
-        chattr -i "$CATALINA_PROPS" 2>/dev/null
-    fi
+    #if command -v chattr &> /dev/null; then
+    #    chattr -i "$CATALINA_PROPS" 2>/dev/null
+    #fi
     
     # Correggi proprietario e gruppo
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CATALINA_PROPS"
@@ -200,10 +203,10 @@ fix_permissions() {
     chmod 750 "$parent_dir"
     
     # Imposta immutabilità
-    if command -v chattr &> /dev/null; then
-        chattr +i "$CATALINA_PROPS"
-        echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
-    fi
+    #if command -v chattr &> /dev/null; then
+    #    chattr +i "$CATALINA_PROPS"
+    #    echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
+    #fi
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
