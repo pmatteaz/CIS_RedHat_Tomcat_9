@@ -100,13 +100,11 @@ fix_server_header() {
     
     # Aggiunge o aggiorna l'attributo server per tutti i connettori
     # Applica la modifica gestendo il multi-riga
-    sed -i '
-    /<[Cc]onnector/,/>/ {
-        />/ {
-            /server=/ ! s/[[:space:]]*>/& server="Apache">/
-        }
+    sed -i '/<[Cc]onnector/,/\/>/ {
+    /server=/ ! {
+        s/\([[:space:]]*\)\/>/\1server="Apache"\n\1\/>/
     }
-' "$SERVER_XML"
+}' "$SERVER_XML"
     
     echo -e "${GREEN}[OK] Server header personalizzato${NC}"
 }
