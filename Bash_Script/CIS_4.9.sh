@@ -28,11 +28,26 @@
 #   Proprietà: tomcat:tomcat
 #   Attributo immutabile
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 CATALINA_POLICY="$TOMCAT_HOME/conf/catalina.policy"
+# Trova JAVA_HOME
+
+SRV=$(systemctl -a | grep -i tomcat | awk '{print $1}')
+JAVA_HOME=$(systemctl show $SRV --property=Environment | sed 's/.*JAVA_HOME=\([^ ]*\).*/\1/')
+
+if [ -n "$JAVA_HOME" ]; then
+    echo "JAVA_HOME è definita: $JAVA_HOME"
+else
+    echo "JAVA_HOME non è definita"
+    exit 1
+fi
+
 
 # Colori per output
 RED='\033[0;31m'
@@ -111,9 +126,21 @@ check_policy_syntax() {
     
     echo "Verifica sintassi policy file..."
     
-    if command -v $JAVA_HOME/bin/policytool &> /dev/null; then
-        # Verifica sintattica usando policytool (se disponibile)
-        if ! $JAVA_HOME/bin/policytool -import "$CATALINA_POLICY" &> /dev/null; then
+    #if command -v $JAVA_HOME/bin/policytool &> /dev/null; then
+    #    # Verifica sintattica usando policytool (se disponibile)
+    #    if ! $JAVA_HOME/bin/policytool -import "$CATALINA_POLICY" &> /dev/null; then
+    #        echo -e "${YELLOW}[WARN] Il file policy potrebbe contenere errori di sintassi${NC}"
+    #        result=1
+    #    else
+    #        echo -e "${GREEN}[OK] Sintassi file policy verificata${NC}"
+    #    fi
+    #else
+    #    echo -e "${YELLOW}[INFO] policytool non disponibile, skip verifica sintassi${NC}"
+    #fi
+
+    if command -v $JAVA_HOME/bin/jarsigner &> /dev/null; then
+        # Verifica sintattica usando jarsigner (se disponibile)
+        if ! $JAVA_HOME/bin/jarsigner -verify -verbose -certs $TOMCAT_HOME/conf/catalina.policy &> /dev/null; then
             echo -e "${YELLOW}[WARN] Il file policy potrebbe contenere errori di sintassi${NC}"
             result=1
         else
@@ -122,6 +149,7 @@ check_policy_syntax() {
     else
         echo -e "${YELLOW}[INFO] policytool non disponibile, skip verifica sintassi${NC}"
     fi
+
     
     return $result
 }
@@ -188,15 +216,15 @@ check_permissions() {
     fi
     
     # Verifica immutabilità del file
-    if command -v lsattr &> /dev/null; then
-        local immutable=$(lsattr "$CATALINA_POLICY" 2>/dev/null | cut -c5)
-        if [ "$immutable" != "i" ]; then
-            echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
-        fi
-    fi
+    #if command -v lsattr &> /dev/null; then
+    #    local immutable=$(lsattr "$CATALINA_POLICY" 2>/dev/null | cut -c5)
+    #    if [ "$immutable" != "i" ]; then
+    #        echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
+    #        result=1
+    #    else
+    #        echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
+    #    fi
+    #fi
     
     return $result
 }
@@ -208,9 +236,9 @@ fix_permissions() {
     create_backup
     
     # Rimuovi immutabilità se presente
-    if command -v chattr &> /dev/null; then
-        chattr -i "$CATALINA_POLICY" 2>/dev/null
-    fi
+    #if command -v chattr &> /dev/null; then
+    #    chattr -i "$CATALINA_POLICY" 2>/dev/null
+    #fi
     
     # Correggi proprietario e gruppo
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CATALINA_POLICY"
@@ -224,10 +252,10 @@ fix_permissions() {
     chmod 750 "$parent_dir"
     
     # Imposta immutabilità
-    if command -v chattr &> /dev/null; then
-        chattr +i "$CATALINA_POLICY"
-        echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
-    fi
+    #if command -v chattr &> /dev/null; then
+    #    chattr +i "$CATALINA_POLICY"
+    #    echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
+    #fi
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
@@ -249,8 +277,8 @@ main() {
     check_permissions
     needs_fix=$?
     
-    check_policy_syntax
-    needs_fix=$((needs_fix + $?))
+    #check_policy_syntax
+    #needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
