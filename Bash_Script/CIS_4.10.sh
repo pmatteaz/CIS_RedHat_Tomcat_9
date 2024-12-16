@@ -29,6 +29,9 @@
 #   webapps/manager/META-INF/context.xml
 #   webapps/host-manager/META-INF/context.xml
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
@@ -150,7 +153,7 @@ check_file_permissions() {
     
     if [ ! -f "$file" ]; then
         return 0
-    }
+    fi 
     
     echo -e "\nControllo permessi per $file"
     

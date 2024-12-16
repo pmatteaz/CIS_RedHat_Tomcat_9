@@ -27,10 +27,13 @@
 #   Directory padre: 750
 #   Proprietà: tomcat:tomcat
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 LOGGING_PROPS="$TOMCAT_HOME/conf/logging.properties"
 
 # Colori per output
@@ -115,13 +118,13 @@ check_logging_configuration() {
     echo "Verifica configurazione logging..."
     
     # Verifica presenza configurazioni critiche
-    if ! grep -q "^handlers=" "$LOGGING_PROPS"; then
+    if ! grep -qE "^[hH]andlers[[:space:]]*=" "$LOGGING_PROPS"; then
         echo -e "${YELLOW}[WARN] Configurazione handlers non trovata${NC}"
         result=1
     fi
     
     # Verifica presenza configurazioni di logging inappropriate
-    if grep -q "ConsoleHandler" "$LOGGING_PROPS"; then
+    if grep -qE "[cC]onsole[hH]andler" "$LOGGING_PROPS"; then
         echo -e "${YELLOW}[WARN] ConsoleHandler trovato - considerare la rimozione in produzione${NC}"
         result=1
     fi
