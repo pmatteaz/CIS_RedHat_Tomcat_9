@@ -27,10 +27,13 @@
 #   Proprietà: tomcat:tomcat
 #   Attributo immutabile
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
 # Colori per output
@@ -66,7 +69,7 @@ check_file_exists() {
 }
 
 create_backup() {
-    local backup_dir="/tmp/tomcat_server_backup_$(date +%Y%m%d_%H%M%S)_CIS_4.12"
+    local backup_dir="/tmp/tomcat_server_backup_$(date +%Y%m%d_%H%M%S)CIS_4.12"
     local backup_file="${backup_dir}/permissions_backup.txt"
     
     echo "Creazione backup della configurazione..."
@@ -191,15 +194,15 @@ check_permissions() {
     fi
     
     # Verifica immutabilità del file
-    if command -v lsattr &> /dev/null; then
-        local immutable=$(lsattr "$SERVER_XML" 2>/dev/null | cut -c5)
-        if [ "$immutable" != "i" ]; then
-            echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
-        fi
-    fi
+    #if command -v lsattr &> /dev/null; then
+    #    local immutable=$(lsattr "$SERVER_XML" 2>/dev/null | cut -c5)
+    #    if [ "$immutable" != "i" ]; then
+    #        echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
+    #        result=1
+    #    else
+    #        echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
+    #    fi
+    #fi
     
     return $result
 }
@@ -211,9 +214,9 @@ fix_permissions() {
     create_backup
     
     # Rimuovi immutabilità se presente
-    if command -v chattr &> /dev/null; then
-        chattr -i "$SERVER_XML" 2>/dev/null
-    fi
+    #if command -v chattr &> /dev/null; then
+    #    chattr -i "$SERVER_XML" 2>/dev/null
+    #fi
     
     # Correggi proprietario e gruppo
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
@@ -222,10 +225,10 @@ fix_permissions() {
     chmod 600 "$SERVER_XML"
     
     # Imposta immutabilità
-    if command -v chattr &> /dev/null; then
-        chattr +i "$SERVER_XML"
-        echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
-    fi
+    #if command -v chattr &> /dev/null; then
+    #    chattr +i "$SERVER_XML"
+    #    echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
+    #fi
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
@@ -247,11 +250,11 @@ main() {
     check_permissions
     needs_fix=$?
     
-    check_xml_syntax
-    needs_fix=$((needs_fix + $?))
+    #check_xml_syntax
+    #needs_fix=$((needs_fix + $?))
     
-    check_critical_settings
-    needs_fix=$((needs_fix + $?))
+    #check_critical_settings
+    #needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"

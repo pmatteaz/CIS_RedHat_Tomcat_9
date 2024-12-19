@@ -16,6 +16,9 @@
 #   Corregge i permessi dei file (600)
 #   Crea backup dei file prima delle modifiche
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 CATALINA_PROPERTIES="$TOMCAT_HOME/conf/catalina.properties"
@@ -27,7 +30,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Valore personalizzato per l'header Server
-CUSTOM_SERVER_VALUE="MyServer"
+CUSTOM_SERVER_VALUE="Server BCC"
 
 check_tomcat_home() {
     if [ ! -d "$TOMCAT_HOME" ]; then
@@ -86,14 +89,14 @@ fix_server_header() {
     
     # Usa awk per una sostituzione più precisa
     awk -v custom="$CUSTOM_SERVER_VALUE" '
-        /<Connector/ {
-            if (!/server="/) {
-                sub(/>/, " server=\"" custom "\">");
-            } else {
-                sub(/server="[^"]*"/, "server=\"" custom "\"");
-            }
-        }
-        { print }
+     /<Connector/ {
+         if (!/server="/) {
+             sub(/[/]?>/, " server=\"" custom "\">");
+         } else {
+             sub(/server="[^"]*"/, "server=\"" custom "\"");
+         }
+     }
+      { print }
     ' "$SERVER_XML" > "$temp_file"
     
     mv "$temp_file" "$SERVER_XML"

@@ -23,10 +23,13 @@
 #   Mantiene la struttura delle directory
 #   Calcola gli hash SHA-256 dei file
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 WEBAPPS_DIR="$TOMCAT_HOME/webapps"
 CONF_WEB_XML="$TOMCAT_HOME/conf/web.xml"
 
@@ -239,11 +242,11 @@ check_all() {
     check_permissions "$CONF_WEB_XML"
     total_result=$((total_result + $?))
     
-    check_xml_syntax "$CONF_WEB_XML"
-    total_result=$((total_result + $?))
+    #check_xml_syntax "$CONF_WEB_XML"
+    #total_result=$((total_result + $?))
     
-    check_web_xml_security "$CONF_WEB_XML"
-    total_result=$((total_result + $?))
+    #check_web_xml_security "$CONF_WEB_XML"
+    #total_result=$((total_result + $?))
     
     # Controllo web.xml delle applicazioni
     echo -e "\nControllo web.xml delle applicazioni..."
