@@ -19,10 +19,13 @@
 #   Salvataggio delle ACL
 #   Verifica dell'integrità tramite hash
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
 # Valore raccomandato per maxHttpHeaderSize (8KB)
@@ -86,41 +89,54 @@ create_backup() {
 
 check_header_size() {
     local result=0
-    
+    result=1
     echo "Controllo configurazione maxHttpHeaderSize..."
-    
+    in_coordinator=1
     # Controlla tutti i connettori
     while IFS= read -r line; do
-        if [[ $line =~ \<Connector ]]; then
-            echo -e "\nAnalisi connettore:"
-            echo "$line"
-            
-            if [[ $line =~ maxHttpHeaderSize=\"([0-9]+)\" ]]; then
-                local size="${BASH_REMATCH[1]}"
+        if [[ $line =~ maxHttpHeaderSize=\"([0-9]+)\" ]]; then
+                local size="$( cut -d '"' -f 2 <<< "$line" )"
                 if [ "$size" -gt "$MAX_HEADER_SIZE" ]; then
                     echo -e "${YELLOW}[WARN] maxHttpHeaderSize ($size) è maggiore del valore raccomandato ($MAX_HEADER_SIZE)${NC}"
-                    result=1
                 elif [ "$size" -lt "$MAX_HEADER_SIZE" ]; then
-                    echo -e "${YELLOW}[WARN] maxHttpHeaderSize ($size) è minore del valore raccomandato ($MAX_HEADER_SIZE)${NC}"
-                    result=1
+                    echo -e "${YELLOW}[WARN] maxHttpHeaderSize ($size) è minore del valore raccomandato ($MAX_HEADER_SIZE)${NC}"  
                 else
                     echo -e "${GREEN}[OK] maxHttpHeaderSize configurato correttamente${NC}"
+                    result=0
                 fi
-            else
-                echo -e "${YELLOW}[WARN] maxHttpHeaderSize non configurato per questo connettore${NC}"
-                result=1
             fi
-            
-            # Verifica altri parametri correlati alla sicurezza
-            if [[ $line =~ protocol=\"([^\"]+)\" ]]; then
-                local protocol="${BASH_REMATCH[1]}"
-                echo -e "Protocollo configurato: $protocol"
-            fi
-        fi
-    done < "$SERVER_XML"
+               
+    done < <(sed '/<!--/,/-->/d' "$SERVER_XML")
     
     return $result
 }
+
+add_max_header_size() {
+    local xml_file="$1"
+    
+    if [ ! -f "$xml_file" ]; then
+        echo "Errore: Il file $xml_file non esiste"
+        return 1
+    fi
+    
+    # Usa sed per:
+    # 1. Ignora i commenti
+    # 2. Trova il tag Connector che non ha già maxHttpHeaderSize
+    # 3. Aggiunge maxHttpHeaderSize="8192" prima della chiusura del tag
+sed -i -e '
+    /<!--/,/-->/b
+    /<Connector/{
+        :a
+        N
+        /\/>/!ba
+        /maxHttpHeaderSize/b
+        s/\([[:space:]]*\)\/>/\1maxHttpHeaderSize="8192" \/>/
+    }
+' "$xml_file"
+    
+    echo "Modifiche applicate a $xml_file"
+}
+
 
 fix_header_size() {
     echo "Applicazione configurazione maxHttpHeaderSize..."
@@ -132,21 +148,16 @@ fix_header_size() {
     local temp_file=$(mktemp)
     
     # Modifica ogni connettore
-    while IFS= read -r line; do
-        if [[ $line =~ \<Connector ]]; then
-            if [[ $line =~ maxHttpHeaderSize=\"([0-9]+)\" ]]; then
-                # Sostituisci il valore esistente
-                line=$(echo "$line" | sed "s/maxHttpHeaderSize=\"[0-9]*\"/maxHttpHeaderSize=\"$MAX_HEADER_SIZE\"/")
-            else
-                # Aggiungi il parametro se non presente
-                line=$(echo "$line" | sed "s/>/ maxHttpHeaderSize=\"$MAX_HEADER_SIZE\">/")
-            fi
-        fi
-        echo "$line" >> "$temp_file"
-    done < "$SERVER_XML"
-    
+    # Se non esiste lo aggiungo a "$SERVER_XML"
+    # Se esiste ma è diverso lo aggiorno 8192
+
+    if ! grep -q maxHttpHeaderSize "$SERVER_XML"; then
+        add_max_header_size "$SERVER_XML"
+    else 
+        sed -i -e 's/maxHttpHeaderSize="[0-9]*"/maxHttpHeaderSize="8192"/g' "$SERVER_XML"
+    fi 
     # Sostituisci il file originale
-    mv "$temp_file" "$SERVER_XML"
+    # mv "$temp_file" "$SERVER_XML"
     
     # Imposta permessi corretti
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
@@ -180,7 +191,7 @@ main() {
     
     local needs_fix=0
     
-    check_header_size
+    check_header_size $SERVER_XML
     needs_fix=$?
     
     if [ $needs_fix -gt 0 ]; then

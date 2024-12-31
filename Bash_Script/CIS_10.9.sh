@@ -20,10 +20,13 @@
 #   Salvataggio delle ACL
 #   Verifica dell'integrità tramite hash
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
 # Valore raccomandato per connectionTimeout (60 secondi)
@@ -92,46 +95,44 @@ check_timeout_configuration() {
     
     echo "Controllo configurazione connectionTimeout..."
     
-    # Controlla tutti i connettori
-    while IFS= read -r line; do
-        if [[ $line =~ \<Connector ]]; then
-            echo -e "\nAnalisi connettore:"
-            echo "$line"
-            
-            if [[ $line =~ connectionTimeout=\"([0-9]+)\" ]]; then
-                local timeout="${BASH_REMATCH[1]}"
-                if [ "$timeout" -lt "$MIN_TIMEOUT" ]; then
-                    echo -e "${YELLOW}[WARN] connectionTimeout ($timeout ms) è troppo basso${NC}"
-                    result=1
-                elif [ "$timeout" -gt "$MAX_TIMEOUT" ]; then
-                    echo -e "${YELLOW}[WARN] connectionTimeout ($timeout ms) è troppo alto${NC}"
-                    result=1
-                else
-                    echo -e "${GREEN}[OK] connectionTimeout configurato correttamente${NC}"
-                fi
-            else
-                echo -e "${YELLOW}[WARN] connectionTimeout non configurato per questo connettore${NC}"
+    # Controlla tutti i timeout configurati
+    local timeout_values=$(grep -o 'connectionTimeout="[0-9]*"' "$SERVER_XML" | cut -d'"' -f2)
+    if [ -z "$timeout_values" ]; then
+        echo -e "${RED}[ERROR] Nessun connectionTimeout configurato in server.xml${NC}"
+        result=1
+    else
+        for timeout in $timeout_values; do
+            if [ "$timeout" -ne "$RECOMMENDED_TIMEOUT" ] ; then
+                echo -e "${YELLOW}[WARN] Valore connectionTimeout diverso da quello raccomandato: $timeout${NC}"
                 result=1
             fi
-            
-            # Verifica altri parametri correlati
-            if [[ $line =~ protocol=\"([^\"]+)\" ]]; then
-                local protocol="${BASH_REMATCH[1]}"
-                echo -e "Protocollo configurato: $protocol"
-            fi
-            
-            # Verifica keepAliveTimeout se presente
-            if [[ $line =~ keepAliveTimeout=\"([0-9]+)\" ]]; then
-                local keep_alive="${BASH_REMATCH[1]}"
-                if [ "$keep_alive" -gt "$RECOMMENDED_TIMEOUT" ]; then
-                    echo -e "${YELLOW}[WARN] keepAliveTimeout ($keep_alive ms) potrebbe essere troppo alto${NC}"
-                    result=1
-                fi
-            fi
-        fi
-    done < "$SERVER_XML"
+        done
+    fi
     
     return $result
+}
+add_connection_timeout (){
+    local xml_file="$1"
+    
+    if [ ! -f "$xml_file" ]; then
+        echo "Errore: Il file $xml_file non esiste"
+        return 1
+    fi
+    
+    # Usa sed per:
+    # 1. Ignora i commenti
+    # 2. Trova il tag Connector che non ha già connectionTimeout
+    # 3. Aggiunge connectionTimeout="6000" prima della chiusura del tag
+ sed -i -e '
+    /<!--/,/-->/b
+    /<Connector/{
+        :a
+        N
+        /\/>/!ba
+        /connectionTimeout/b
+        s/\([[:space:]]*\)\([^[:space:]>][^>]*\)\([[:space:]]*\)\/>/\1\2\n\1connectionTimeout="'$RECOMMENDED_TIMEOUT'" \/>/
+    }' "$xml_file"
+    echo "Modifichato connectionTimeout a $RECOMMENDED_TIMEOUT applicate a $xml_file"
 }
 
 fix_timeout_configuration() {
@@ -143,26 +144,16 @@ fix_timeout_configuration() {
     # File temporaneo per le modifiche
     local temp_file=$(mktemp)
     
-    # Modifica ogni connettore
-    while IFS= read -r line; do
-        if [[ $line =~ \<Connector ]]; then
-            if [[ $line =~ connectionTimeout=\"([0-9]+)\" ]]; then
-                # Sostituisci il valore esistente
-                line=$(echo "$line" | sed "s/connectionTimeout=\"[0-9]*\"/connectionTimeout=\"$RECOMMENDED_TIMEOUT\"/")
-            else
-                # Aggiungi il parametro se non presente
-                line=$(echo "$line" | sed "s/>/ connectionTimeout=\"$RECOMMENDED_TIMEOUT\">/")
-            fi
-        fi
-        echo "$line" >> "$temp_file"
-    done < "$SERVER_XML"
-    
-    # Sostituisci il file originale
-    mv "$temp_file" "$SERVER_XML"
-    
-    # Imposta permessi corretti
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
-    chmod 600 "$SERVER_XML"
+    if [ -z "$temp_file" ]; then
+        echo -e "${RED}[ERROR] Impossibile creare un file temporaneo${NC}"
+        exit 1
+    fi
+
+    if  grep -q 'connectionTimeout=' "$SERVER_XML"; then
+        sed -i -e 's/connectionTimeout=\"[0-9]*\"/connectionTimeout=\"'$RECOMMENDED_TIMEOUT'\"/' "$SERVER_XML" 
+    else  
+        add_connection_timeout "$SERVER_XML"
+    fi
     
     echo -e "${GREEN}[OK] Configurazione connectionTimeout aggiornata${NC}"
     

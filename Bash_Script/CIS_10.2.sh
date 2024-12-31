@@ -18,10 +18,13 @@
 #   Configurazione sicura mantenendo le applicazioni
 #   Rimozione completa delle applicazioni manager
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 MANAGER_DIR="$TOMCAT_HOME/webapps/manager"
 HOST_MANAGER_DIR="$TOMCAT_HOME/webapps/host-manager"
 TOMCAT_USERS_XML="$TOMCAT_HOME/conf/tomcat-users.xml"
@@ -33,6 +36,27 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+
+
+insert_valve_line(){
+# Il file di input sarà il primo argomento
+input_file="$1"
+
+# La riga da inserire
+valve_line='    <Valve className="org.apache.catalina.valves.RemoteAddrValve" allow="127\.0\.0\.1"/>'
+
+# Usa sed per inserire la riga dopo </Connector>
+# 1. Cerca il pattern da Service fino a </Connector>
+# 2. Quando trova </Connector>, aggiunge la riga valve_line dopo
+sed -i '/<Service/,/<\/Connector>/ {
+    /<\/Connector>/ a\
+'"$valve_line"'
+}' "$input_file"
+
+# Per verificare il risultato
+echo "${GREEM}Contenuto aggiornato del file: $input_file${NC}"
+
+}
 
 # Configurazione per il context.xml
 CONTEXT_CONFIG='<?xml version="1.0" encoding="UTF-8"?>
@@ -89,6 +113,8 @@ check_manager_installation() {
             echo -e "${YELLOW}[WARN] Permessi directory manager non corretti: $perms${NC}"
             result=1
         fi
+    else
+        echo -e "${GREEN}[OK] Applicazione manager non presente${NC}"
     fi
     
     if [ -d "$HOST_MANAGER_DIR" ]; then
@@ -100,6 +126,8 @@ check_manager_installation() {
             echo -e "${YELLOW}[WARN] Permessi directory host-manager non corretti: $perms${NC}"
             result=1
         fi
+    else
+       echo -e "${GREEN}[OK] Applicazione host-manager non presente${NC}"
     fi
     
     return $result

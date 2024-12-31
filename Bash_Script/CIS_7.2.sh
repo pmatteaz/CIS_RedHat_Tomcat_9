@@ -21,10 +21,13 @@
 #   Correzione permessi file e directory
 #   Rotazione automatica dei log
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 LOGGING_PROPS="$TOMCAT_HOME/conf/logging.properties"
 LOG_DIR="$TOMCAT_HOME/logs"
 
@@ -111,7 +114,7 @@ check_handler_config() {
     echo "Controllo configurazione file handler..."
     
     # Verifica handlers definiti
-    if ! grep -q "^handlers = .*FileHandler" "$LOGGING_PROPS"; then
+    if ! grep -Eq "(^[hH]andlers = .*FileHandler|[[:space:]][hH]andlers = .*FileHandler)" "$LOGGING_PROPS"; then
         echo -e "${YELLOW}[WARN] FileHandler non configurato correttamente${NC}"
         result=1
     else
@@ -120,46 +123,46 @@ check_handler_config() {
     
     # Verifica configurazioni obbligatorie
     local required_configs=(
-        "org.apache.juli.FileHandler.level"
-        "org.apache.juli.FileHandler.directory"
-        "org.apache.juli.FileHandler.prefix"
-        "org.apache.juli.FileHandler.suffix"
-        "org.apache.juli.FileHandler.formatter"
+        "org.apache.juli.AsyncFileHandler.level"
     )
+    #    "org.apache.juli.AsyncFileHandler.directory"
+    #    "org.apache.juli.AsyncFileHandler.prefix"
+    #    "org.apache.juli.AsyncFileHandler.suffix"
+    #    "org.apache.juli.AsyncFileHandler.formatter"
     
     for config in "${required_configs[@]}"; do
-        if ! grep -q "^$config = " "$LOGGING_PROPS"; then
+        if ! grep -E "$config = " "$LOGGING_PROPS"; then
             echo -e "${YELLOW}[WARN] Configurazione mancante: $config${NC}"
             result=1
         fi
     done
     
     # Verifica directory di log
-    if grep -q "^org.apache.juli.FileHandler.directory = " "$LOGGING_PROPS"; then
-        local log_dir=$(grep "^org.apache.juli.FileHandler.directory = " "$LOGGING_PROPS" | cut -d'=' -f2 | tr -d ' ')
-        if [ ! -d "$log_dir" ]; then
-            echo -e "${YELLOW}[WARN] Directory di log non esistente: $log_dir${NC}"
-            result=1
-        else
-            # Verifica permessi directory
-            local dir_perms=$(stat -c '%a' "$log_dir")
-            if [ "$dir_perms" != "750" ]; then
-                echo -e "${YELLOW}[WARN] Permessi directory log non corretti: $dir_perms (dovrebbero essere 750)${NC}"
-                result=1
-            fi
-        fi
-    fi
+    #if grep -q "^org.apache.juli.FileHandler.directory = " "$LOGGING_PROPS"; then
+    #    local log_dir=$(grep "^org.apache.juli.FileHandler.directory = " "$LOGGING_PROPS" | cut -d'=' -f2 | tr -d ' ')
+    #    if [ ! -d "$log_dir" ]; then
+    #        echo -e "${YELLOW}[WARN] Directory di log non esistente: $log_dir${NC}"
+    #        result=1
+    #    else
+    #        # Verifica permessi directory
+    #        local dir_perms=$(stat -c '%a' "$log_dir")
+    #        if [ "$dir_perms" != "750" ]; then
+    #            echo -e "${YELLOW}[WARN] Permessi directory log non corretti: $dir_perms (dovrebbero essere 750)${NC}"
+    #            result=1
+    #        fi
+    #    fi
+    #fi
     
     # Verifica configurazioni di sicurezza
-    if ! grep -q "^org.apache.juli.FileHandler.buffered = false" "$LOGGING_PROPS"; then
-        echo -e "${YELLOW}[WARN] Buffering non disabilitato - potenziale rischio di perdita log${NC}"
-        result=1
-    fi
-    
-    if ! grep -q "^org.apache.juli.FileHandler.encoding = UTF-8" "$LOGGING_PROPS"; then
-        echo -e "${YELLOW}[WARN] Encoding non specificato${NC}"
-        result=1
-    fi
+    #if ! grep -q "^org.apache.juli.FileHandler.buffered = false" "$LOGGING_PROPS"; then
+    #    echo -e "${YELLOW}[WARN] Buffering non disabilitato - potenziale rischio di perdita log${NC}"
+    #    result=1
+    #fi
+    #
+    #if ! grep -q "^org.apache.juli.FileHandler.encoding = UTF-8" "$LOGGING_PROPS"; then
+    #    echo -e "${YELLOW}[WARN] Encoding non specificato${NC}"
+    #    result=1
+    #fi
     
     return $result
 }
@@ -168,18 +171,21 @@ fix_handler_config() {
     echo "Applicazione configurazione file handler..."
     
     # Assicurati che la directory di log esista
-    mkdir -p "$LOG_DIR"
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOG_DIR"
-    chmod 750 "$LOG_DIR"
+    #mkdir -p "$LOG_DIR"
+    #chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOG_DIR"
+    #chmod 750 "$LOG_DIR"
+    if [ ! -f "$LOG_DIR" ]; then
+        echo -e "${RED}[ERROR] Directory di logging non trovato: $LOG_DIR${NC}"
+        exit 1
+    fi
     
     # Applica la configurazione raccomandata
-    echo "$HANDLER_CONFIG" > "$LOGGING_PROPS"
+    # echo "$HANDLER_CONFIG" > "$LOGGING_PROPS"
+
+    # Applico modifica alla riga handlers
+
+    sed -i 's/juli,/juli.AsyncFileHandler,/g' "$LOGGING_PROPS"
     
-    # Imposta i permessi corretti
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$LOGGING_PROPS"
-    chmod 600 "$LOGGING_PROPS"
-    
-    echo -e "${GREEN}[OK] Configurazione file handler corretta applicata${NC}"
 }
 
 check_log_files() {
@@ -231,8 +237,8 @@ main() {
     check_handler_config
     needs_fix=$((needs_fix + $?))
     
-    check_log_files
-    needs_fix=$((needs_fix + $?))
+    #check_log_files
+    #needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
@@ -241,7 +247,7 @@ main() {
         if [[ "$response" =~ ^[Yy]$ ]]; then
             create_backup
             fix_handler_config
-            fix_log_files
+            # fix_log_files
             echo -e "\n${GREEN}Fix completato.${NC}"
             echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
             echo -e "${YELLOW}NOTA: Verificare che il logging funzioni correttamente${NC}"
