@@ -1,31 +1,27 @@
 #!/bin/bash
 
 # Script per il controllo e fix del CIS Control 10.14
-# Do not allow cross context requests
 #
 # Lo script implementa le seguenti funzionalità:
 # Verifica delle configurazioni cross context:
 #   Context.xml globale
 #   Context.xml delle singole applicazioni
-#   Web.xml delle applicazioni
-#   Parametri correlati alla sicurezza
 # 
 # Controlli per:
 #   Attributo crossContext
-#   Configurazioni nei context-param
-#   Permessi dei file
-#   Vulnerabilità correlate
+#   Configurazioni nei context-param di web.xml
 # 
 # Funzionalità di correzione:
 #   Disabilita il cross context globalmente
-#   Rimuove configurazioni pericolose
-#   Imposta permessi sicuri
 #   Backup di tutti i file modificati
+
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
 WEBAPPS_DIR="$TOMCAT_HOME/webapps"
 
@@ -162,14 +158,14 @@ fix_cross_context() {
     done
     
     # Imposta i permessi corretti
-    find "$WEBAPPS_DIR" -name "context.xml" -type f -exec chown "$TOMCAT_USER:$TOMCAT_GROUP" {} \;
-    find "$WEBAPPS_DIR" -name "context.xml" -type f -exec chmod 600 {} \;
-    find "$WEBAPPS_DIR" -name "web.xml" -type f -exec chown "$TOMCAT_USER:$TOMCAT_GROUP" {} \;
-    find "$WEBAPPS_DIR" -name "web.xml" -type f -exec chmod 600 {} \;
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CONTEXT_XML"
-    chmod 600 "$CONTEXT_XML"
+    # find "$WEBAPPS_DIR" -name "context.xml" -type f -exec chown "$TOMCAT_USER:$TOMCAT_GROUP" {} \;
+    # find "$WEBAPPS_DIR" -name "context.xml" -type f -exec chmod 600 {} \;
+    # find "$WEBAPPS_DIR" -name "web.xml" -type f -exec chown "$TOMCAT_USER:$TOMCAT_GROUP" {} \;
+    # find "$WEBAPPS_DIR" -name "web.xml" -type f -exec chmod 600 {} \;
+    # chown "$TOMCAT_USER:$TOMCAT_GROUP" "$CONTEXT_XML"
+    # chmod 600 "$CONTEXT_XML"
     
-    echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
+    # echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
 }
 
 main() {

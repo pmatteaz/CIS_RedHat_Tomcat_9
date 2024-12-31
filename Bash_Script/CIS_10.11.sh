@@ -1,18 +1,14 @@
 #!/bin/bash
 
 # Script per il controllo e fix del CIS Control 10.11
-# Force SSL for all applications
 #
 # Lo script implementa le seguenti funzionalità:
-# Verifica configurazione SSL:
-#   Connettore HTTPS in server.xml
-#   Protocolli SSL/TLS abilitati
-#   Cipher suites sicure
 #   Security constraints in web.xml
-# 
+#   Inserisce un security constraint con transport-guarantee CONFIDENTIAL se mancante
+#   
 # Funzionalità aggiuntive:
 #   Backup dei file modificati
-#   Verifica permessi
+#   Verifica della sintassi XML
 
 
 # Cerca e setta la home di tomcat

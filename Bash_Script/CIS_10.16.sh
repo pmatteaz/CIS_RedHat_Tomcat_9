@@ -6,23 +6,22 @@
 # Lo script implementa le seguenti funzionalità:
 # Verifica della configurazione:
 #   Controllo presenza del Memory Leak Listener
-#   Verifica posizione ottimale nel server.xml
-#   Controllo impostazioni JVM correlate
 # 
 # Funzionalità di correzione:
 #   Configurazione del Memory Leak Listener
-#   Impostazione logging GC
-#   Configurazione JVM ottimale
 # 
 # Sistema di backup:
 #   Backup di server.xml prima delle modifiche
 #   Backup con timestamp
 #   Verifica dell'integrità tramite hash
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 SERVER_XML="$TOMCAT_HOME/conf/server.xml"
 
 # Colori per output
@@ -105,48 +104,32 @@ check_memory_leak_configuration() {
     
     echo "Controllo configurazione Memory Leak Listener..."
     
-    # Verifica presenza del Memory Leak Listener
-    if ! grep -q "org.apache.catalina.core.JreMemoryLeakPreventionListener" "$SERVER_XML"; then
-        echo -e "${YELLOW}[WARN] Memory Leak Listener non configurato${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] Memory Leak Listener trovato${NC}"
+    # Verifica presenza del Memory Leak Listener considerando anche eventuali commenti
+    if grep -q "<!--.*org.apache.catalina.core.JreMemoryLeakPreventionListener.*-->" "$SERVER_XML"; then
+       echo -e "${YELLOW}[WARN] Memory Leak Listener configurato ma commentato${NC}"
+       result=1
+    elif grep -q "org.apache.catalina.core.JreMemoryLeakPreventionListener" "$SERVER_XML"; then
         
-        # Verifica posizione corretta (dovrebbe essere tra i primi listener)
-        local listener_line=$(grep -n "JreMemoryLeakPreventionListener" "$SERVER_XML" | cut -d: -f1)
-        local server_line=$(grep -n "<Server" "$SERVER_XML" | cut -d: -f1)
+         echo -e "${GREEN}[OK] Memory Leak Listener configurato${NC}"
         
+         # Verifica posizione corretta (dovrebbe essere tra i primi listener)
+         local listener_line=$(grep -n "JreMemoryLeakPreventionListener" "$SERVER_XML" | cut -d: -f1)
+         local server_line=$(grep -n "<Server" "$SERVER_XML" | cut -d: -f1)
+    
         if [ $((listener_line - server_line)) -gt 10 ]; then
             echo -e "${YELLOW}[WARN] Memory Leak Listener potrebbe non essere nella posizione ottimale${NC}"
             result=1
         else
             echo -e "${GREEN}[OK] Memory Leak Listener in posizione corretta${NC}"
         fi
-    fi
-    
-    return $result
-}
-
-check_jvm_settings() {
-    local result=0
-    
-    echo "Controllo impostazioni JVM correlate..."
-    
-    # Verifica CATALINA_OPTS per impostazioni di memoria correlate
-    if [ -f "$TOMCAT_HOME/bin/setenv.sh" ]; then
-        if ! grep -q "gc.log" "$TOMCAT_HOME/bin/setenv.sh"; then
-            echo -e "${YELLOW}[WARN] GC logging non configurato${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] GC logging configurato${NC}"
-        fi
     else
-        echo -e "${YELLOW}[WARN] setenv.sh non trovato, impossibile verificare le impostazioni JVM${NC}"
+        echo -e "${YELLOW}[WARN] Memory Leak Listener non configurato${NC}"
         result=1
     fi
     
     return $result
 }
+
 
 fix_memory_leak_listener() {
     echo "Configurazione Memory Leak Listener..."
@@ -154,10 +137,9 @@ fix_memory_leak_listener() {
     # Crea backup prima delle modifiche
     create_backup
     
-    # Rimuovi eventuali configurazioni esistenti del Memory Leak Listener
-    sed -i '/<Listener.*JreMemoryLeakPreventionListener.*\/>/d' "$SERVER_XML"
-    
-    # Aggiungi il nuovo Memory Leak Listener dopo il tag Server
+    # Se esiste già un Memory Leak Listener commentato o non commentato, rimuovilo
+    sed -i '/org.apache.catalina.core.JreMemoryLeakPreventionListener/d' "$SERVER_XML"    
+    # Aggiungi il Memory Leak Listener all'inizio della lista dei listener
     sed -i "/<Server/a\\    $MEMORY_LEAK_LISTENER" "$SERVER_XML"
     
     echo -e "${GREEN}[OK] Memory Leak Listener configurato${NC}"
@@ -170,26 +152,6 @@ fix_memory_leak_listener() {
     fi
 }
 
-configure_jvm_settings() {
-    echo "Configurazione impostazioni JVM..."
-    
-    local setenv_file="$TOMCAT_HOME/bin/setenv.sh"
-    
-    # Crea o aggiorna setenv.sh
-    if [ ! -f "$setenv_file" ]; then
-        echo "#!/bin/bash" > "$setenv_file"
-    fi
-    
-    # Aggiungi configurazioni GC logging se non presenti
-    if ! grep -q "gc.log" "$setenv_file"; then
-        echo 'CATALINA_OPTS="$CATALINA_OPTS -XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:$CATALINA_BASE/logs/gc.log"' >> "$setenv_file"
-    fi
-    
-    chmod +x "$setenv_file"
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$setenv_file"
-    
-    echo -e "${GREEN}[OK] Impostazioni JVM configurate${NC}"
-}
 
 main() {
     echo "Controllo CIS 10.16 - Enable Memory Leak Listener"
@@ -204,16 +166,12 @@ main() {
     check_memory_leak_configuration
     needs_fix=$?
     
-    check_jvm_settings
-    needs_fix=$((needs_fix + $?))
-    
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
         read -r response
         
         if [[ "$response" =~ ^[Yy]$ ]]; then
             fix_memory_leak_listener
-            configure_jvm_settings
             echo -e "\n${GREEN}Fix completato.${NC}"
             echo -e "${YELLOW}NOTA: Riavviare Tomcat per applicare le modifiche${NC}"
             echo -e "${YELLOW}NOTA: Monitorare i log GC per verificare il corretto funzionamento${NC}"
