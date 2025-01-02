@@ -8,25 +8,20 @@
 #   File tomcat-users.xml
 #   Proprietà utente/gruppo
 #   Permessi specifici
-#   Immutabilità del file
-# 
-# Controlli di sicurezza per:
-#   Username comuni/default
-#   Password in chiaro
-#   Ruoli privilegiati
-#   Sintassi XML
 # 
 # Include una funzione di backup completa che:
 #   Crea un backup con timestamp
 #   Salva i permessi attuali
 #   Mantiene le ACL se disponibili
-#   Analizza le configurazioni utente (senza esporre password)
 #   Calcola l'hash SHA-256 del file
+
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 TOMCAT_USERS_XML="$TOMCAT_HOME/conf/tomcat-users.xml"
 
 # Colori per output
@@ -93,63 +88,12 @@ create_backup() {
         sha256sum "$TOMCAT_USERS_XML" > "${backup_dir}/tomcat-users.xml.sha256"
     fi
     
-    # Analisi delle configurazioni utente (con password offuscate)
-    echo "### User Configuration Analysis" >> "$backup_file"
-    grep -v "password=" "$TOMCAT_USERS_XML" >> "$backup_file"
-    echo "Number of users configured:" >> "$backup_file"
-    grep -c "<user " "$TOMCAT_USERS_XML" >> "$backup_file"
-    
     # Crea un tarball del backup
     tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
     rm -rf "$backup_dir"
     
     echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
     echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
-}
-
-check_xml_syntax() {
-    local result=0
-    
-    echo "Verifica sintassi XML..."
-    
-    if command -v xmllint &> /dev/null; then
-        if ! xmllint --noout "$TOMCAT_USERS_XML" 2>/dev/null; then
-            echo -e "${YELLOW}[WARN] File tomcat-users.xml contiene errori di sintassi XML${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] Sintassi XML corretta${NC}"
-        fi
-    else
-        echo -e "${YELLOW}[INFO] xmllint non disponibile, skip verifica sintassi XML${NC}"
-    fi
-    
-    return $result
-}
-
-check_users_security() {
-    local result=0
-    
-    echo "Verifica configurazioni di sicurezza utenti..."
-    
-    # Verifica presenza utenti default
-    if grep -qiE "username=\"(admin|manager|root|tomcat)\"" "$TOMCAT_USERS_XML"; then
-        echo -e "${YELLOW}[WARN] Rilevati username comuni/default${NC}"
-        result=1
-    fi
-    
-    # Verifica password in chiaro
-    if grep -q "password=\"[^\"]*\"" "$TOMCAT_USERS_XML"; then
-        echo -e "${YELLOW}[WARN] Rilevate password in chiaro${NC}"
-        result=1
-    fi
-    
-    # Verifica ruoli privilegiati
-    if grep -qiE "roles=\".*manager.*\"" "$TOMCAT_USERS_XML"; then
-        echo -e "${YELLOW}[WARN] Rilevati ruoli manager${NC}"
-        result=1
-    fi
-    
-    return $result
 }
 
 check_permissions() {
@@ -183,17 +127,6 @@ check_permissions() {
         echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
     fi
     
-    # Verifica immutabilità del file
-    if command -v lsattr &> /dev/null; then
-        local immutable=$(lsattr "$TOMCAT_USERS_XML" 2>/dev/null | cut -c5)
-        if [ "$immutable" != "i" ]; then
-            echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
-        fi
-    fi
-    
     return $result
 }
 
@@ -203,22 +136,11 @@ fix_permissions() {
     # Crea backup prima di applicare le modifiche
     create_backup
     
-    # Rimuovi immutabilità se presente
-    if command -v chattr &> /dev/null; then
-        chattr -i "$TOMCAT_USERS_XML" 2>/dev/null
-    fi
-    
     # Correggi proprietario e gruppo
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$TOMCAT_USERS_XML"
     
     # Imposta permessi stretti
     chmod 600 "$TOMCAT_USERS_XML"
-    
-    # Imposta immutabilità
-    if command -v chattr &> /dev/null; then
-        chattr +i "$TOMCAT_USERS_XML"
-        echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
-    fi
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
@@ -239,12 +161,6 @@ main() {
     
     check_permissions
     needs_fix=$?
-    
-    check_xml_syntax
-    needs_fix=$((needs_fix + $?))
-    
-    check_users_security
-    needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"

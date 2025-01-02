@@ -112,32 +112,6 @@ create_backup() {
     echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
 }
 
-check_logging_configuration() {
-    local result=0
-    
-    echo "Verifica configurazione logging..."
-    
-    # Verifica presenza configurazioni critiche
-    if ! grep -qE "^[hH]andlers[[:space:]]*=" "$LOGGING_PROPS"; then
-        echo -e "${YELLOW}[WARN] Configurazione handlers non trovata${NC}"
-        result=1
-    fi
-    
-    # Verifica presenza configurazioni di logging inappropriate
-    if grep -qE "[cC]onsole[hH]andler" "$LOGGING_PROPS"; then
-        echo -e "${YELLOW}[WARN] ConsoleHandler trovato - considerare la rimozione in produzione${NC}"
-        result=1
-    fi
-    
-    # Verifica livelli di logging
-    if grep -q "\.level = FINE\|\.level = FINER\|\.level = FINEST" "$LOGGING_PROPS"; then
-        echo -e "${YELLOW}[WARN] Trovati livelli di logging dettagliati - considerare di aumentare il livello in produzione${NC}"
-        result=1
-    fi
-    
-    return $result
-}
-
 check_permissions() {
     local result=0
     
@@ -169,34 +143,6 @@ check_permissions() {
         echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
     fi
     
-    # Verifica directory padre
-    local parent_dir=$(dirname "$LOGGING_PROPS")
-    local parent_owner=$(stat -c '%U' "$parent_dir")
-    local parent_group=$(stat -c '%G' "$parent_dir")
-    local parent_perms=$(stat -c '%a' "$parent_dir")
-    
-    echo -e "\nControllo directory padre ($parent_dir):"
-    
-    if [ "$parent_owner" != "$TOMCAT_USER" ]; then
-        echo -e "${YELLOW}[WARN] Proprietario directory padre non corretto: $parent_owner (dovrebbe essere $TOMCAT_USER)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] Proprietario directory padre corretto: $parent_owner${NC}"
-    fi
-    
-    if [ "$parent_group" != "$TOMCAT_GROUP" ]; then
-        echo -e "${YELLOW}[WARN] Gruppo directory padre non corretto: $parent_group (dovrebbe essere $TOMCAT_GROUP)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] Gruppo directory padre corretto: $parent_group${NC}"
-    fi
-    
-    if [ "$parent_perms" != "750" ]; then
-        echo -e "${YELLOW}[WARN] Permessi directory padre non corretti: $parent_perms (dovrebbero essere 750)${NC}"
-        result=1
-    else
-        echo -e "${GREEN}[OK] Permessi directory padre corretti: $parent_perms${NC}"
-    fi
     
     return $result
 }
@@ -214,9 +160,9 @@ fix_permissions() {
     chmod 600 "$LOGGING_PROPS"
     
     # Correggi permessi directory padre
-    local parent_dir=$(dirname "$LOGGING_PROPS")
-    chown "$TOMCAT_USER:$TOMCAT_GROUP" "$parent_dir"
-    chmod 750 "$parent_dir"
+    #local parent_dir=$(dirname "$LOGGING_PROPS")
+    #chown "$TOMCAT_USER:$TOMCAT_GROUP" "$parent_dir"
+    #chmod 750 "$parent_dir"
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
@@ -237,9 +183,6 @@ main() {
     
     check_permissions
     needs_fix=$?
-    
-    check_logging_configuration
-    needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"

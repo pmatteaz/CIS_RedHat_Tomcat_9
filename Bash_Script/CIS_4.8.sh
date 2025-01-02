@@ -6,10 +6,8 @@
 # Lo script implementa le seguenti funzionalità:
 # Verifica dettagliata delle autorizzazioni per:
 #   File catalina.properties
-#   Directory padre (conf)
 #   Proprietà utente/gruppo
 #   Permessi specifici
-#   Immutabilità del file
 # 
 # Include una funzione di backup completa che:
 #   Crea un backup con timestamp

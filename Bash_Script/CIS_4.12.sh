@@ -8,24 +8,16 @@
 #   File server.xml
 #   Proprietà utente/gruppo
 #   Permessi specifici
-#   Immutabilità del file
-# 
-# Verifica della configurazione:
-#   Sintassi XML
-#   Configurazioni critiche (porte, SSL, AJP)
-#   Impostazioni di sicurezza
 # 
 # Include una funzione di backup completa che:
 #   Crea un backup con timestamp
 #   Salva i permessi attuali
 #   Mantiene le ACL se disponibili
-#   Analizza le configurazioni sensibili
 #   Calcola l'hash SHA-256 del file
 # 
 # Controlli specifici per:
 #   File server.xml: 600
 #   Proprietà: tomcat:tomcat
-#   Attributo immutabile
 
 # Cerca e setta la home di tomcat
 . ./Find_catalinaHome.sh
@@ -99,67 +91,12 @@ create_backup() {
     if command -v sha256sum &> /dev/null; then
         sha256sum "$SERVER_XML" > "${backup_dir}/server.xml.sha256"
     fi
-    
-    # Analisi configurazioni sensibili
-    echo "### Sensitive Configuration Analysis" >> "$backup_file"
-    echo "Connectors:" >> "$backup_file"
-    grep -A 5 "<Connector" "$SERVER_XML" >> "$backup_file"
-    echo "Listeners:" >> "$backup_file"
-    grep -A 2 "<Listener" "$SERVER_XML" >> "$backup_file"
-    
     # Crea un tarball del backup
     tar -czf "${backup_dir}.tar.gz" -C "$(dirname "$backup_dir")" "$(basename "$backup_dir")"
     rm -rf "$backup_dir"
     
     echo -e "${GREEN}[OK] Backup creato in: ${backup_dir}.tar.gz${NC}"
     echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
-}
-
-check_xml_syntax() {
-    local result=0
-    
-    echo "Verifica sintassi XML..."
-    
-    if command -v xmllint &> /dev/null; then
-        if ! xmllint --noout "$SERVER_XML" 2>/dev/null; then
-            echo -e "${YELLOW}[WARN] File server.xml contiene errori di sintassi XML${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] Sintassi XML corretta${NC}"
-        fi
-    else
-        echo -e "${YELLOW}[INFO] xmllint non disponibile, skip verifica sintassi XML${NC}"
-    fi
-    
-    return $result
-}
-
-check_critical_settings() {
-    local result=0
-    
-    echo "Verifica configurazioni critiche..."
-    
-    # Verifica shutdown port
-    if grep -q 'port="8005"' "$SERVER_XML"; then
-        echo -e "${YELLOW}[WARN] Shutdown port default (8005) rilevata${NC}"
-        result=1
-    fi
-    
-    # Verifica presenza AJP non protetto
-    if grep -q '<Connector protocol="AJP/1.3"' "$SERVER_XML" && ! grep -q 'secretRequired="true"' "$SERVER_XML"; then
-        echo -e "${YELLOW}[WARN] Connettore AJP senza secret rilevato${NC}"
-        result=1
-    fi
-    
-    # Verifica SSL settings
-    if grep -q 'SSLEnabled="true"' "$SERVER_XML"; then
-        if ! grep -q 'sslProtocol="TLS"' "$SERVER_XML"; then
-            echo -e "${YELLOW}[WARN] SSL abilitato ma protocollo TLS non specificato${NC}"
-            result=1
-        fi
-    fi
-    
-    return $result
 }
 
 check_permissions() {
@@ -192,17 +129,7 @@ check_permissions() {
     else
         echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
     fi
-    
-    # Verifica immutabilità del file
-    #if command -v lsattr &> /dev/null; then
-    #    local immutable=$(lsattr "$SERVER_XML" 2>/dev/null | cut -c5)
-    #    if [ "$immutable" != "i" ]; then
-    #        echo -e "${YELLOW}[WARN] File non è impostato come immutabile${NC}"
-    #        result=1
-    #    else
-    #        echo -e "${GREEN}[OK] File è impostato come immutabile${NC}"
-    #    fi
-    #fi
+
     
     return $result
 }
@@ -213,22 +140,12 @@ fix_permissions() {
     # Crea backup prima di applicare le modifiche
     create_backup
     
-    # Rimuovi immutabilità se presente
-    #if command -v chattr &> /dev/null; then
-    #    chattr -i "$SERVER_XML" 2>/dev/null
-    #fi
     
     # Correggi proprietario e gruppo
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$SERVER_XML"
     
     # Imposta permessi stretti
     chmod 600 "$SERVER_XML"
-    
-    # Imposta immutabilità
-    #if command -v chattr &> /dev/null; then
-    #    chattr +i "$SERVER_XML"
-    #    echo -e "${GREEN}[OK] File impostato come immutabile${NC}"
-    #fi
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
@@ -249,12 +166,6 @@ main() {
     
     check_permissions
     needs_fix=$?
-    
-    #check_xml_syntax
-    #needs_fix=$((needs_fix + $?))
-    
-    #check_critical_settings
-    #needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"

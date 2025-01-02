@@ -6,7 +6,6 @@
 # Lo script implementa le seguenti funzionalità:
 # Verifica dettagliata delle autorizzazioni per:
 #   File catalina.policy
-#   Directory padre (conf)
 #   Proprietà utente/gruppo
 #   Permessi specifici
 #   Immutabilità del file
@@ -124,19 +123,8 @@ create_backup() {
 check_policy_syntax() {
     local result=0
     
-    echo "Verifica sintassi policy file..."
     
-    #if command -v $JAVA_HOME/bin/policytool &> /dev/null; then
-    #    # Verifica sintattica usando policytool (se disponibile)
-    #    if ! $JAVA_HOME/bin/policytool -import "$CATALINA_POLICY" &> /dev/null; then
-    #        echo -e "${YELLOW}[WARN] Il file policy potrebbe contenere errori di sintassi${NC}"
-    #        result=1
-    #    else
-    #        echo -e "${GREEN}[OK] Sintassi file policy verificata${NC}"
-    #    fi
-    #else
-    #    echo -e "${YELLOW}[INFO] policytool non disponibile, skip verifica sintassi${NC}"
-    #fi
+     echo "Verifica sintassi policy file..."
 
     if command -v $JAVA_HOME/bin/jarsigner &> /dev/null; then
         # Verifica sintattica usando jarsigner (se disponibile)
@@ -270,6 +258,9 @@ main() {
     
     check_root
     check_tomcat_user
+
+
+    
     check_file_exists
     
     local needs_fix=0

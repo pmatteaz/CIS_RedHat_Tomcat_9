@@ -1,32 +1,17 @@
 #!/bin/bash
-
+# Fa già tutto la 4.2
 # Script per il controllo e fix del CIS Control 4.3
 # Restrict access to Tomcat configuration directory
 #
-# Lo script implementa le seguenti funzionalità:
-# Verifica dettagliata delle autorizzazioni per:
-# 
-# Directory conf principale
-# File di configurazione critici
-# Proprietà utente/gruppo
-# Permessi specifici
-# 
-# Include una funzione di backup completa che:
-# Crea un backup con timestamp
-# Salva tutti i permessi attuali
-# Mantiene le ACL se disponibili
-# Fa una copia fisica dei file di configurazione
-# Crea un archivio compresso
-# 
-# Controlli specifici per:
-# Directory conf: 700
-# File di configurazione: 600
-# Proprietà: tomcat:tomcat
+
+
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 CONF_DIR="$TOMCAT_HOME/conf"
 
 # File critici di configurazione

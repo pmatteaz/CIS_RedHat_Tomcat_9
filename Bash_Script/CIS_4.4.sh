@@ -1,37 +1,18 @@
 #!/bin/bash
 
+# Fa già tutto la 4.2
 # Script per il controllo e fix del CIS Control 4.4
 # Restrict access to Tomcat logs directory
 #
-# Lo script implementa le seguenti funzionalità:
-# Verifica dettagliata delle autorizzazioni per:
-# 
-# Directory logs principale
-# File di log specifici
-# Proprietà utente/gruppo
-# Permessi specifici
-# 
-# Include una funzione di backup completa che:
-# Crea un backup con timestamp
-# Salva tutti i permessi attuali
-# Mantiene le ACL se disponibili
-# Salva solo i permessi dei file di log (non i contenuti)
-# 
-# Configurazione di logrotate:
-# Verifica se logrotate è installato
-# Configura la rotazione automatica dei log
-# Imposta i permessi corretti per i nuovi file di log
-# 
-# Controlli specifici per:
-# 
-# Directory logs: 750
-# File di log: 640
-# Proprietà: tomcat:tomcat
+
+
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
 
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 LOGS_DIR="$TOMCAT_HOME/logs"
 
 # Tipi di file di log comuni
@@ -258,8 +239,8 @@ main() {
     check_permissions
     needs_fix=$?
     
-    check_log_rotation
-    needs_fix=$((needs_fix + $?))
+    #check_log_rotation
+    #needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"

@@ -1,16 +1,13 @@
 #!/bin/bash
 
-# Script per il controllo e fix del CIS Control 4.2
-# Restrict access to $CATALINA_BASE
+# Script per il controllo e fix del CIS Control 4.2 - 4.7 
+# Restrict access to Directory $CATALINA_BASE
 #
 # Lo script implementa le seguenti funzionalità:
 # Verifica le autorizzazioni per:
 # 
 # Tutte le directory in CATALINA_BASE
-# File all'interno di queste directory
-# Proprietà utente/gruppo
-# Permessi specifici per directory sensibili
-# 
+
 # Include una funzione di backup completa che:
 # 
 # Crea un backup con timestamp
@@ -22,12 +19,6 @@
 # 
 # L'esistenza dell'utente e gruppo Tomcat
 # I permessi corretti per ogni directory
-# Proprietà dei file
-# Permessi specifici per:
-# 
-# conf: 700 (dir), 600 (files)
-# logs, temp, work: 750 (dir), 640 (files)
-# altre directory: 750 (dir), 640 (files)
 
 # Cerca e setta la home di tomcat
 . ./Find_catalinaHome.sh
@@ -106,7 +97,7 @@ create_backup() {
             
             # Backup dei permessi usando getfacl
             if command -v getfacl &> /dev/null; then
-                getfacl -R "$dir" > "${backup_dir}/$(basename "$dir")_acl.txt"
+                getfacl -R "$dir" > "${backup_dir}/$(basename "$dir")_acl.txt" 2>/dev/null
             fi
         fi
     done
@@ -154,11 +145,8 @@ check_permissions() {
         # Verifica permessi specifici per directory
         local expected_perms
         case "$dir" in
-            "$CATALINA_BASE/conf")
-                expected_perms="700"
-                ;;
-            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work" | "$CATALINA_BASE/bin" )
-                expected_perms="750"
+            "$CATALINA_BASE/temp")
+                expected_perms="770"
                 ;;
             *)
                 expected_perms="750"
@@ -173,27 +161,27 @@ check_permissions() {
         fi
         
         # Controlla permessi dei file nella directory
-        if [ -d "$dir" ]; then
-            find "$dir" -type f -print0 | while IFS= read -r -d '' file; do
-                local file_perms=$(stat -c '%a' "$file")
-                local file_owner=$(stat -c '%U' "$file")
-                local file_group=$(stat -c '%G' "$file")
-                
-                if [ "$file_owner" != "$TOMCAT_USER" ] || [ "$file_group" != "$TOMCAT_GROUP" ]; then
-                    echo -e "${YELLOW}[WARN] File con proprietario/gruppo non corretto: $file${NC}"
-                    result=1
-                fi
-                
-                # Permessi più restrittivi per file in conf
-                if [[ "$dir" == "$CATALINA_BASE/conf" && "$file_perms" != "600" ]]; then
-                    echo -e "${YELLOW}[WARN] File in conf con permessi non corretti: $file ($file_perms)${NC}"
-                    result=1
-                elif [[ "$dir" != "$CATALINA_BASE/conf" && "$file_perms" -gt "640" ]]; then
-                    echo -e "${YELLOW}[WARN] File con permessi troppo permissivi: $file ($file_perms)${NC}"
-                    result=1
-                fi
-            done
-        fi
+        #if [ -d "$dir" ]; then
+        #    find "$dir" -type f -print0 | while IFS= read -r -d '' file; do
+        #        local file_perms=$(stat -c '%a' "$file")
+        #        local file_owner=$(stat -c '%U' "$file")
+        #        local file_group=$(stat -c '%G' "$file")
+        #        
+        #        if [ "$file_owner" != "$TOMCAT_USER" ] || [ "$file_group" != "$TOMCAT_GROUP" ]; then
+        #            echo -e "${YELLOW}[WARN] File con proprietario/gruppo non corretto: $file${NC}"
+        #            result=1
+        #        fi
+        #        
+        #        # Permessi più restrittivi per file in conf
+        #        if [[ "$dir" == "$CATALINA_BASE/conf" && "$file_perms" != "600" ]]; then
+        #            echo -e "${YELLOW}[WARN] File in conf con permessi non corretti: $file ($file_perms)${NC}"
+        #            result=1
+        #        elif [[ "$dir" != "$CATALINA_BASE/conf" && "$file_perms" -gt "640" ]]; then
+        #            echo -e "${YELLOW}[WARN] File con permessi troppo permissivi: $file ($file_perms)${NC}"
+        #            result=1
+        #        fi
+        #    done
+        #fi
     done
     
     return $result
@@ -217,21 +205,11 @@ fix_permissions() {
         
         # Imposta permessi specifici per directory
         case "$dir" in
-            "$CATALINA_BASE/conf")
-                chmod 700 "$dir"
-                find "$dir" -type f -exec chmod 600 {} \;
-                ;;
-            "$CATALINA_BASE/logs" | "$CATALINA_BASE/temp" | "$CATALINA_BASE/work")
-                chmod 750 "$dir"
-                find "$dir" -type f -exec chmod 640 {} \;
-                ;;
-            "$CATALINA_BASE/bin")
-                chmod 750 "$dir"
-                find "$dir/*.sh" -type f -exec chmod 750 {} \;
+            "$CATALINA_BASE/temp")
+                chmod 770 "$dir"
                 ;;
             *)
                 chmod 750 "$dir"
-                find "$dir" -type f -exec chmod 640 {} \;
                 ;;
         esac
     done

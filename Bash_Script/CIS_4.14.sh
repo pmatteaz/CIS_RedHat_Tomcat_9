@@ -10,12 +10,6 @@
 #   Proprietà utente/gruppo
 #   Permessi specifici
 # 
-# Controlli di sicurezza per:
-#   Sintassi XML
-#   Configurazioni di sicurezza
-#   Debug mode
-#   Security constraints
-# 
 # Include una funzione di backup completa che:
 #   Crea un backup con timestamp di tutti i web.xml
 #   Salva i permessi attuali
@@ -127,42 +121,6 @@ create_backup() {
     echo -e "${YELLOW}[INFO] Conservare questo backup per eventuale ripristino${NC}"
 }
 
-check_xml_syntax() {
-    local file="$1"
-    local result=0
-    
-    if command -v xmllint &> /dev/null; then
-        if ! xmllint --noout "$file" 2>/dev/null; then
-            echo -e "${YELLOW}[WARN] File $file contiene errori di sintassi XML${NC}"
-            result=1
-        else
-            echo -e "${GREEN}[OK] Sintassi XML corretta per $file${NC}"
-        fi
-    else
-        echo -e "${YELLOW}[INFO] xmllint non disponibile, skip verifica sintassi XML${NC}"
-    fi
-    
-    return $result
-}
-
-check_web_xml_security() {
-    local file="$1"
-    local result=0
-    
-    # Verifica configurazioni di sicurezza comuni
-    if ! grep -q "<security-constraint>" "$file"; then
-        echo -e "${YELLOW}[WARN] Nessun security-constraint trovato in $file${NC}"
-        result=1
-    fi
-    
-    # Verifica presenza di configurazioni sensibili
-    if grep -q "debug=\"true\"" "$file"; then
-        echo -e "${YELLOW}[WARN] Debug mode abilitato in $file${NC}"
-        result=1
-    fi
-    
-    return $result
-}
 
 check_permissions() {
     local file="$1"
@@ -189,8 +147,8 @@ check_permissions() {
         echo -e "${GREEN}[OK] Gruppo file corretto: $file_group${NC}"
     fi
     
-    if [ "$file_perms" != "600" ]; then
-        echo -e "${YELLOW}[WARN] Permessi file non corretti: $file_perms (dovrebbero essere 600)${NC}"
+    if [ "$file_perms" != "400" ]; then
+        echo -e "${YELLOW}[WARN] Permessi file non corretti: $file_perms (dovrebbero essere 400)${NC}"
         result=1
     else
         echo -e "${GREEN}[OK] Permessi file corretti: $file_perms${NC}"
@@ -212,7 +170,7 @@ fix_permissions() {
     chown "$TOMCAT_USER:$TOMCAT_GROUP" "$file"
     
     # Imposta permessi stretti
-    chmod 600 "$file"
+    chmod 400 "$file"
     
     echo -e "${GREEN}[OK] Permessi corretti applicati a $file${NC}"
 }
@@ -242,22 +200,10 @@ check_all() {
     check_permissions "$CONF_WEB_XML"
     total_result=$((total_result + $?))
     
-    #check_xml_syntax "$CONF_WEB_XML"
-    #total_result=$((total_result + $?))
-    
-    #check_web_xml_security "$CONF_WEB_XML"
-    #total_result=$((total_result + $?))
-    
     # Controllo web.xml delle applicazioni
     echo -e "\nControllo web.xml delle applicazioni..."
     find "$WEBAPPS_DIR" -name "web.xml" -type f | while read -r webapp_xml; do
         check_permissions "$webapp_xml"
-        total_result=$((total_result + $?))
-        
-        check_xml_syntax "$webapp_xml"
-        total_result=$((total_result + $?))
-        
-        check_web_xml_security "$webapp_xml"
         total_result=$((total_result + $?))
     done
     

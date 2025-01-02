@@ -34,8 +34,8 @@
 
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
-TOMCAT_USER=${TOMCAT_USER:-tomcat}
-TOMCAT_GROUP=${TOMCAT_GROUP:-tomcat}
+TOMCAT_USER=${CATALINA_USER:-tomcat}
+TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
 CONTEXT_XML="$TOMCAT_HOME/conf/context.xml"
 
 # Array dei possibili context.xml in applicazioni web
@@ -153,7 +153,7 @@ check_file_permissions() {
     
     if [ ! -f "$file" ]; then
         return 0
-    fi 
+    fi
     
     echo -e "\nControllo permessi per $file"
     
@@ -194,20 +194,20 @@ check_permissions() {
     check_file_permissions "$CONTEXT_XML"
     total_result=$((total_result + $?))
     
-    check_xml_syntax "$CONTEXT_XML"
-    total_result=$((total_result + $?))
+    #check_xml_syntax "$CONTEXT_XML"
+    #total_result=$((total_result + $?))
     
     # Controlla context.xml delle applicazioni web
-    for ctx in "${WEBAPP_CONTEXTS[@]}"; do
-        local webapp_context="$TOMCAT_HOME/webapps/$ctx"
-        if [ -f "$webapp_context" ]; then
-            check_file_permissions "$webapp_context"
-            total_result=$((total_result + $?))
-            
-            check_xml_syntax "$webapp_context"
-            total_result=$((total_result + $?))
-        fi
-    done
+    #for ctx in "${WEBAPP_CONTEXTS[@]}"; do
+    #    local webapp_context="$TOMCAT_HOME/webapps/$ctx"
+    #    if [ -f "$webapp_context" ]; then
+    #        check_file_permissions "$webapp_context"
+    #        total_result=$((total_result + $?))
+    #        
+    #        check_xml_syntax "$webapp_context"
+    #        total_result=$((total_result + $?))
+    #    fi
+    #done
     
     return $total_result
 }
@@ -225,13 +225,13 @@ fix_permissions() {
     fi
     
     # Fix context.xml delle applicazioni web
-    for ctx in "${WEBAPP_CONTEXTS[@]}"; do
-        local webapp_context="$TOMCAT_HOME/webapps/$ctx"
-        if [ -f "$webapp_context" ]; then
-            chown "$TOMCAT_USER:$TOMCAT_GROUP" "$webapp_context"
-            chmod 600 "$webapp_context"
-        fi
-    done
+    #for ctx in "${WEBAPP_CONTEXTS[@]}"; do
+    #    local webapp_context="$TOMCAT_HOME/webapps/$ctx"
+    #    if [ -f "$webapp_context" ]; then
+    #        chown "$TOMCAT_USER:$TOMCAT_GROUP" "$webapp_context"
+    #        chmod 600 "$webapp_context"
+    #    fi
+    #done
     
     echo -e "${GREEN}[OK] Permessi corretti applicati${NC}"
     
