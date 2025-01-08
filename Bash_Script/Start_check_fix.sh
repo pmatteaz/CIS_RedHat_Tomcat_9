@@ -99,8 +99,8 @@ print_section "7.6 Ensure directory in logging.properties is a secure location"
 print_section "8.1 Restrict runtime access to sensitive packages"
 ./CIS_8.1.sh
 # 10.2	Restrict access to the web administration application
-print_section "10.2 Restrict access to the web administration application"
-./CIS_10.2.sh
+#print_section "10.2 Restrict access to the web administration application"
+#./CIS_10.2.sh
 # 10.9	Configure connectionTimeout
 print_section "10.9 Configure connectionTimeout"
 ./CIS_10.9.sh
