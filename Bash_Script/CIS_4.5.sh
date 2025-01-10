@@ -29,6 +29,9 @@
 # Rimuove file temporanei vecchi
 # Opzione di pulizia anche se i permessi sono corretti
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 # Configurazione predefinita
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 TOMCAT_USER=${TOMCAT_USER:-tomcat}
