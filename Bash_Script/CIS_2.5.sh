@@ -17,6 +17,9 @@
 #   Configurazione appropriata in web.xml
 #
 
+# Cerca e setta la home di tomcat
+. ./Find_catalinaHome.sh
+
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 WEB_XML="$TOMCAT_HOME/conf/web.xml"
 ERROR_PAGES=(
