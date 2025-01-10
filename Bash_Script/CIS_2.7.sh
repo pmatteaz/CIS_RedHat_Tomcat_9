@@ -170,8 +170,8 @@ main() {
     check_server_header_config
     needs_fix=$((needs_fix + $?))
     
-    check_file_permissions
-    needs_fix=$((needs_fix + $?))
+    #check_file_permissions
+    #needs_fix=$((needs_fix + $?))
     
     if [ $needs_fix -gt 0 ]; then
         echo -e "\n${YELLOW}Sono stati rilevati problemi. Vuoi procedere con il fix? (y/n)${NC}"
@@ -179,7 +179,7 @@ main() {
         
         if [[ "$response" =~ ^[Yy]$ ]]; then
             fix_server_header
-            fix_file_permissions
+            #fix_file_permissions
             echo -e "\n${GREEN}Fix completato. Riavviare Tomcat per applicare le modifiche.${NC}"
             echo -e "${YELLOW}NOTA: Il valore dell'header Server è stato impostato a '$CUSTOM_SERVER_VALUE'.${NC}"
             echo -e "${YELLOW}      Modificare la variabile CUSTOM_SERVER_VALUE nello script per personalizzarlo.${NC}"
