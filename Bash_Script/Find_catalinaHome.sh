@@ -71,7 +71,7 @@ set_tomcat_home() {
 }
 
 find_tomcat_user(){
-    CATALINA_USER=$(ps -ef | grep [t]omcat | awk '{print $1}')
+    CATALINA_USER=$(ps -ef | grep \/[t]omcat | awk '{print $1}')
     CATALINA_GROUP=$(id $CATALINA_USER | cut -d'(' -f3 |cut -d')' -f1)
     if [[ -n $CATALINA_USER && -n $CATALINA_GROUP ]]; then
         export CATALINA_USER
