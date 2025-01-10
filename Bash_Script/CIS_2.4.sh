@@ -102,7 +102,7 @@ fix_server_header() {
     # Applica la modifica gestendo il multi-riga
     sed -i '/<[Cc]onnector/,/\/>/ {
     /server=/ ! {
-        s/\([[:space:]]*\)\/>/\1server="Apache"\n\1\/>/
+        s/\([[:space:]]*\)\/>/\1server="Server BCC"\n\1\/>/
     }
 }' "$SERVER_XML"
     
