@@ -4,11 +4,11 @@
 # Restrict access to Tomcat configuration directory
 #
 
-
 # Cerca e setta la home di tomcat
 . ./Find_catalinaHome.sh
 
 # Configurazione predefinita
+CATALINA_BASE=${CATALINA_HOME}
 TOMCAT_HOME=${CATALINA_HOME:-/usr/share/tomcat}
 TOMCAT_USER=${CATALINA_USER:-tomcat}
 TOMCAT_GROUP=${CATALINA_GROUP:-tomcat}
