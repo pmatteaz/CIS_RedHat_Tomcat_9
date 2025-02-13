@@ -108,8 +108,8 @@ print_section "10.9 Configure connectionTimeout"
 print_section "10.10 Configure maxHttpHeaderSize"
 ./CIS_10.10.sh
 # 10.11	Force SSL for all applications
-print_section "10.11 Force SSL for all applications"
-./CIS_10.11.sh
+#print_section "10.11 Force SSL for all applications"
+#./CIS_10.11.sh
 # 10.14	Do not allow cross context requests
 print_section "10.14 Do not allow cross context requests"
 ./CIS_10.14.sh
